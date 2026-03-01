@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Scissors, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
+import sawasdeeLogo from "@/assets/sawasdee-logo.png";
 import { useToast } from "@/hooks/use-toast";
 
 const Login = () => {
@@ -30,11 +31,9 @@ const Login = () => {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md animate-fade-in">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl gold-gradient gold-glow mb-4">
-            <Scissors className="w-8 h-8 text-primary-foreground" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">BarberQ</h1>
-          <p className="text-muted-foreground mt-1">ระบบจองคิวตัดผมออนไลน์</p>
+          <img src={sawasdeeLogo} alt="Sawasdee Krab Barber Logo" className="w-20 h-20 rounded-2xl mx-auto mb-4 object-cover" />
+          <h1 className="text-2xl font-bold text-foreground">Sawasdee Krab Barber</h1>
+          <p className="text-muted-foreground mt-1">ระบบจองคิวร้านสวัสดีคลับ</p>
         </div>
 
         <Card className="card-shadow border-border/50">
