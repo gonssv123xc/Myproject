@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Barber {
+  id             String           @id
+  userId         String           @unique
+  nickname       String?
+  bio            String?
+  specialties    String?
+  avatar         String?
+  phone          String?
+  rating         Float            @default(0)
+  status         BarberStatus     @default(AVAILABLE)
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  User           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  BarberSchedule BarberSchedule[]
+  Booking        Booking[]
+  Review         Review[]
+  BarberCustomerLink BarberCustomerLink[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model BarberSchedule {
+  id        String   @id
+  barberId  String
+  dayOfWeek Int
+  startTime String
+  endTime   String
+  isOff     Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  Barber    Barber   @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@unique([barberId, dayOfWeek])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Booking {
+  id             String        @id
+  customerId     String
+  barberId       String
+  serviceId      String
+  date           DateTime
+  startTime      String
+  endTime        String
+  status         BookingStatus @default(PENDING)
+  notes          String?
+  referenceImage String?
+  totalPrice     Float
+  depositAmount  Float?
+  slipImageUrl   String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime
+  couponId           String?
+  promoCodeId        String?
+  isSubmittedToOwner Boolean       @default(false)
+  Barber         Barber        @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  User           User          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Service        Service       @relation(fields: [serviceId], references: [id])
+  UserCoupon     UserCoupon?   @relation(fields: [couponId], references: [id])
+  PromoCode      PromoCode?    @relation(fields: [promoCodeId], references: [id])
+  Review         Review?
+
+  @@index([barberId, date, startTime])
+  @@index([customerId])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Notification {
+  id        String   @id
+  userId    String
+  title     String
+  message   String
+  type      String
+  isRead    Boolean  @default(false)
+  data      String?
+  createdAt DateTime @default(now())
+  User      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Review {
+  id        String   @id
+  bookingId String   @unique
+  userId    String
+  barberId  String
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+  Barber    Barber   @relation(fields: [barberId], references: [id])
+  Booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  User      User     @relation(fields: [userId], references: [id])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Service {
+  id          String    @id
+  name        String
+  description String?
+  price       Float
+  duration    Int
+  icon        String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+  Booking     Booking[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model User {
+  id           String         @id
+  email        String         @unique
+  password     String
+  firstName    String
+  lastName     String
+  phone        String?
+  role         Role           @default(CUSTOMER)
+  avatar       String?
+  points       Float          @default(0)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime
+  Barber       Barber?
+  Booking      Booking[]
+  Notification Notification[]
+  Review       Review[]
+  UserCoupon   UserCoupon[]
+  BarberCustomerLink BarberCustomerLink[]
+}
+
+enum Role {
+  CUSTOMER
+  BARBER
+  OWNER
+}
+
+enum BarberStatus {
+  AVAILABLE
+  BUSY
+  BREAK
+  OFF
+}
+
+enum BookingStatus {
+  PENDING
+  PENDING_PAYMENT
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Reward {
+  id            String       @id @default(uuid())
+  name          String
+  description   String?
+  pointsCost    Float
+  discountValue Float?
+  discountType  String       // "PERCENTAGE", "FIXED_AMOUNT", "FREE_SERVICE"
+  imageUrl      String?
+  isActive      Boolean      @default(true)
+  UserCoupon    UserCoupon[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model UserCoupon {
+  id        String    @id @default(uuid())
+  userId    String
+  rewardId  String
+  isUsed    Boolean   @default(false)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  User      User      @relation(fields: [userId], references: [id])
+  Reward    Reward    @relation(fields: [rewardId], references: [id])
+  Booking   Booking[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model PromoCode {
+  id            String    @id @default(uuid())
+  code          String    @unique
+  discountType  String    // "PERCENTAGE", "FIXED_AMOUNT"
+  discountValue Float
+  maxUsage      Int?
+  currentUsage  Int       @default(0)
+  expiresAt     DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  Booking       Booking[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model BarberCustomerLink {
+  id         String   @id @default(uuid())
+  barberId   String
+  customerId String
+  createdAt  DateTime @default(now())
+
+  Barber     Barber   @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  User       User     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([barberId, customerId])
+}
