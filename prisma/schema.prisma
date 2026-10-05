@@ -129,6 +129,7 @@ model User {
   role         Role           @default(CUSTOMER)
   avatar       String?
   points       Float          @default(0)
+  telegramChatId String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime
   Barber       Barber?
@@ -214,4 +215,23 @@ model BarberCustomerLink {
   User       User     @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@unique([barberId, customerId])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Shop {
+  id              String    @id @default(uuid())
+  name            String    @default("ร้านตัดผม")
+  subtitle        String?   @default("ระบบจองคิวออนไลน์")
+  logoUrl         String?
+  coverUrl        String?
+  phone           String?   @default("090-360-3093")
+  address         String?   @default("ถนน จิระ ตำบล ในเมือง อ.เมืองบุรีรัมย์ บุรีรัมย์ 31000")
+  openHours       String?   @default("09:00 – 19:00")
+  promptpayNumber String?   @default("0999999999")
+  facebookUrl     String?   @default("https://www.facebook.com/profile.php?id=100063824452415")
+  instagramUrl    String?   @default("https://instagram.com")
+  lineUrl         String?   @default("https://line.me")
+  tiktokUrl       String?   @default("https://tiktok.com")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }

@@ -243,8 +243,8 @@ export const BarberDashboardScreen: React.FC = () => {
             <View style={{ flex: 1, marginLeft: 20 }}>
               <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#FFF', marginBottom: 4 }}>
                 {barberProfile.firstName
-                  ? `ช่าง${barberProfile.firstName}${barberProfile.lastName ? ' ' + barberProfile.lastName : ''}`
-                  : `ช่าง${barberProfile.nickname || "ไม่ระบุชื่อ"}`
+                  ? `${barberProfile.firstName}${barberProfile.lastName ? ' ' + barberProfile.lastName : ''}`
+                  : (barberProfile.nickname || "ไม่ระบุชื่อ")
                 }
               </Text>
               {barberProfile.bio && (
@@ -654,7 +654,7 @@ export const BarberDashboardScreen: React.FC = () => {
                   )}
                 </View>
                 <View style={{ marginLeft: 12 }}>
-                  <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>ช่าง{barberProfile.nickname || "ไม่ระบุชื่อ"}</Text>
+                  <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>{barberProfile.nickname || barberProfile.firstName || "ไม่ระบุชื่อ"}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 12 }}>ผู้ส่งรายงาน</Text>
                 </View>
               </View>

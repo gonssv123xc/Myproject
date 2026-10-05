@@ -9,6 +9,8 @@ import {
   Alert,
   ImageBackground,
   Platform,
+  useWindowDimensions,
+  KeyboardAvoidingView,
 } from "react-native";
 import { Plus, Pencil, Trash2, Scissors, X, AlertTriangle } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
@@ -19,16 +21,20 @@ import { CustomCard } from "../../components/CustomCard";
 import { CustomButton } from "../../components/CustomButton";
 import { CustomInput } from "../../components/CustomInput";
 import { confirmLogout } from "../../utils/logout";
-import { getServices, Service } from "../../services/bookingService";
+import { getServices, Service, formatDuration } from "../../services/bookingService";
 import { addService, updateService, deleteService } from "../../services/ownerService";
+import { supabase } from "../../services/supabase";
 import { useFocusEffect } from "@react-navigation/native";
 
 export const ServicesScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { width } = useWindowDimensions();
+  const isMobile = width < 720;
+
   const [services, setServices] = useState<Service[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [editItem, setEditItem] = useState<Service | null>(null);
-  const [form, setForm] = useState({ name: "", price: "", duration: "" });
+  const [form, setForm] = useState({ name: "", price: "", hours: "0", minutes: "30" });
   const [loading, setLoading] = useState(true);
 
   // Custom delete confirm modal
@@ -47,25 +53,41 @@ export const ServicesScreen: React.FC = () => {
   useFocusEffect(
     React.useCallback(() => {
       loadServices();
+      const channel = supabase
+        .channel('services_realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'Service' }, () => {
+          loadServices();
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }, [])
   );
 
   const openAddModal = () => {
     setEditItem(null);
-    setForm({ name: "", price: "", duration: "" });
+    setForm({ name: "", price: "", hours: "0", minutes: "30" });
     setModalVisible(true);
   };
 
   const openEditModal = (item: Service) => {
     setEditItem(item);
-    // Parse duration string back to number if needed, or keep as is for input
-    setForm({ name: item.name, price: String(item.price), duration: item.duration.replace(" นาที", "") });
+    const totalMinutes = item.durationMinutes ?? (parseInt(item.duration.replace(/[^0-9]/g, ""), 10) || 0);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    setForm({
+      name: item.name,
+      price: String(item.price),
+      hours: String(h),
+      minutes: String(m),
+    });
     setModalVisible(true);
   };
 
   const handleSave = async () => {
-    if (!form.name || !form.price || !form.duration) {
-      Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอกข้อมูลให้ครบถ้วน");
+    if (!form.name.trim()) {
+      Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอกชื่อบริการ");
       return;
     }
 
@@ -75,21 +97,21 @@ export const ServicesScreen: React.FC = () => {
     } else {
       parsedPrice = parseInt(form.price.replace(/[^0-9]/g, ''), 10);
     }
-    
-    let parsedDuration = parseInt(form.duration.replace(/[^0-9]/g, ''), 10);
-
     if (isNaN(parsedPrice)) parsedPrice = 0;
-    if (isNaN(parsedDuration)) parsedDuration = 0;
 
-    if (parsedDuration === 0) {
-      Alert.alert("รูปแบบไม่ถูกต้อง", "กรุณาระบุระยะเวลาเป็นตัวเลข (เช่น 30)");
+    const parsedHours = parseInt(form.hours.replace(/[^0-9]/g, ''), 10) || 0;
+    const parsedMinutes = parseInt(form.minutes.replace(/[^0-9]/g, ''), 10) || 0;
+    const parsedDuration = (parsedHours * 60) + parsedMinutes;
+
+    if (parsedDuration <= 0) {
+      Alert.alert("รูปแบบไม่ถูกต้อง", "กรุณาระบุระยะเวลาอย่างน้อย 1 นาที (ชั่วโมง หรือ นาที)");
       return;
     }
 
     setLoading(true);
     if (editItem) {
       const { error } = await updateService(editItem.id, {
-        name: form.name,
+        name: form.name.trim(),
         price: parsedPrice,
         duration: parsedDuration
       });
@@ -100,7 +122,7 @@ export const ServicesScreen: React.FC = () => {
       }
     } else {
       const { error } = await addService({
-        name: form.name,
+        name: form.name.trim(),
         price: parsedPrice,
         duration: parsedDuration
       });
@@ -160,14 +182,14 @@ export const ServicesScreen: React.FC = () => {
           <Text style={{ textAlign: "center", marginTop: 20, color: colors.textMuted }}>ยังไม่มีบริการ</Text>
         ) : (
           services.map((item) => (
-          <View key={item.id} style={styles.glassCard}>
+          <View key={item.id} style={[styles.glassCard, isMobile && styles.glassCardMobile]}>
             <View style={styles.serviceRow}>
               <View style={styles.leftInfo}>
                 <View style={[styles.iconBg, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
                   <Scissors size={20} color="#3B82F6" />
                 </View>
-                <View>
-                  <Text style={styles.serviceName}>{item.name}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.serviceName} numberOfLines={1}>{item.name}</Text>
                   <Text style={styles.durationText}>{item.duration}</Text>
                 </View>
               </View>
@@ -187,48 +209,110 @@ export const ServicesScreen: React.FC = () => {
       </ScrollView>
 
       {/* Modal Dialog */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalContent, isMobile && styles.modalContentMobile]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
                 {editItem ? "แก้ไขบริการ" : "เพิ่มบริการใหม่"}
               </Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
                 <X size={20} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
 
-            <CustomInput
-              label="ชื่อบริการ"
-              placeholder="เช่น ตัดผมชาย"
-              value={form.name}
-              onChangeText={(text) => setForm({ ...form, name: text })}
-            />
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 10 }}
+            >
+              <CustomInput
+                label="ชื่อบริการ"
+                placeholder="เช่น ตัดผมชาย"
+                value={form.name}
+                onChangeText={(text) => setForm({ ...form, name: text })}
+              />
 
-            <CustomInput
-              label="ราคา (บาท)"
-              placeholder="เช่น 200"
-              keyboardType="numeric"
-              value={form.price}
-              onChangeText={(text) => setForm({ ...form, price: text })}
-            />
+              <CustomInput
+                label="ราคา (บาท)"
+                placeholder="เช่น 200"
+                keyboardType="numeric"
+                value={form.price}
+                onChangeText={(text) => setForm({ ...form, price: text })}
+              />
 
-            <CustomInput
-              label="ระยะเวลา (นาที)"
-              placeholder="เช่น 30"
-              keyboardType="numeric"
-              value={form.duration}
-              onChangeText={(text) => setForm({ ...form, duration: text })}
-            />
+              {/* ระยะเวลาบริการ (ชั่วโมง และ นาที) */}
+              <Text style={styles.inputSectionLabel}>ระยะเวลาบริการ</Text>
+              <View style={styles.durationRow}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <CustomInput
+                    label="ชั่วโมง (ชม.)"
+                    placeholder="0"
+                    keyboardType="numeric"
+                    value={form.hours}
+                    onChangeText={(text) => setForm({ ...form, hours: text.replace(/[^0-9]/g, '') })}
+                  />
+                </View>
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <CustomInput
+                    label="นาที (น.)"
+                    placeholder="30"
+                    keyboardType="numeric"
+                    value={form.minutes}
+                    onChangeText={(text) => setForm({ ...form, minutes: text.replace(/[^0-9]/g, '') })}
+                  />
+                </View>
+              </View>
 
-            <CustomButton
-              title={editItem ? "บันทึก" : "เพิ่มบริการ"}
-              onPress={handleSave}
-              style={{ marginTop: 8 }}
-            />
+              {/* Quick Presets */}
+              <Text style={styles.presetLabel}>เลือกเวลาด่วน:</Text>
+              <View style={styles.presetsContainer}>
+                {[
+                  { label: "15 นาที", h: "0", m: "15" },
+                  { label: "30 นาที", h: "0", m: "30" },
+                  { label: "45 นาที", h: "0", m: "45" },
+                  { label: "1 ชม.", h: "1", m: "0" },
+                  { label: "1 ชม. 30 น.", h: "1", m: "30" },
+                  { label: "2 ชม.", h: "2", m: "0" },
+                ].map((preset) => {
+                  const isSelected = form.hours === preset.h && form.minutes === preset.m;
+                  return (
+                    <TouchableOpacity
+                      key={preset.label}
+                      style={[styles.presetChip, isSelected && styles.presetChipActive]}
+                      onPress={() => setForm({ ...form, hours: preset.h, minutes: preset.m })}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.presetChipText, isSelected && styles.presetChipTextActive]}>
+                        {preset.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Duration Live Preview Badge */}
+              <View style={styles.previewBox}>
+                <Text style={styles.previewText}>
+                  ⏱️ รวมเวลา:{" "}
+                  <Text style={styles.previewHighlight}>
+                    {formatDuration((parseInt(form.hours || "0", 10) * 60) + parseInt(form.minutes || "0", 10))}
+                  </Text>
+                  {` (${(parseInt(form.hours || "0", 10) * 60) + parseInt(form.minutes || "0", 10)} นาที)`}
+                </Text>
+              </View>
+
+              <CustomButton
+                title={editItem ? "บันทึก" : "เพิ่มบริการ"}
+                onPress={handleSave}
+                style={{ marginTop: 8 }}
+              />
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ─── Custom Delete Confirm Modal ─── */}
@@ -325,6 +409,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+    width: "100%",
+    maxWidth: 680,
+    alignSelf: "center",
+  },
+  glassCardMobile: {
+    padding: 14,
+    marginBottom: 10,
+    borderRadius: 16,
   },
   serviceRow: {
     flexDirection: "row",
@@ -335,6 +427,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    flex: 1,
+    marginRight: 10,
   },
   iconBg: {
     width: 40,
@@ -357,13 +451,13 @@ const styles = StyleSheet.create({
   rightActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
   },
   priceText: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "900",
     color: "#10B981",
-    marginRight: 8,
+    marginRight: 4,
   },
   iconBtn: {
     padding: 8,
@@ -381,16 +475,26 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: "rgba(0,0,0,0.75)",
     justifyContent: "center",
-    padding: 20,
+    alignItems: "center",
+    padding: 16,
   },
   modalContent: {
-    backgroundColor: colors.card,
-    borderRadius: 20,
+    backgroundColor: "#1E293B",
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: colors.cardBorder,
-    padding: 20,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    padding: 22,
+    width: "100%",
+    maxWidth: 480,
+    maxHeight: "88%",
+  },
+  modalContentMobile: {
+    width: "100%",
+    maxHeight: "92%",
+    padding: 16,
+    borderRadius: 20,
   },
   modalHeader: {
     flexDirection: "row",
@@ -401,7 +505,74 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: "bold",
+    color: "#FFFFFF",
+  },
+  closeBtn: {
+    padding: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 12,
+  },
+  inputSectionLabel: {
+    fontSize: 14,
+    fontWeight: "600",
     color: colors.text,
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  durationRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  presetLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: 6,
+    marginTop: 2,
+  },
+  presetsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  presetChip: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+  },
+  presetChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  presetChipText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  presetChipTextActive: {
+    color: "#0F172A",
+    fontWeight: "bold",
+  },
+  previewBox: {
+    backgroundColor: "rgba(59, 130, 246, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(59, 130, 246, 0.28)",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginBottom: 14,
+    alignItems: "center",
+  },
+  previewText: {
+    fontSize: 13,
+    color: "#93C5FD",
+  },
+  previewHighlight: {
+    fontWeight: "bold",
+    color: "#FFFFFF",
   },
 
   // ─── Delete Modal ───

@@ -1,8 +1,32 @@
 import { supabase } from "./supabase";
+import { createClient } from "@supabase/supabase-js";
+import { decode } from "base64-arraybuffer";
+
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+
+// Dedicated client for admin operations without overwriting the logged-in owner's session
+const authAdminClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+});
+
+// Generate a UUID (React Native compatible fallback)
+const generateUUID = () => {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
 
 export interface AddBarberInput {
   name: string;
   email: string;
+  password?: string;
   specialty?: string;
   phone?: string;
   avatar?: string;
@@ -10,94 +34,179 @@ export interface AddBarberInput {
 
 /**
  * Add a new barber:
- * 1. Create Supabase Auth user (default password: barber@1234)
- * 2. Create User row with role BARBER
- * 3. Create Barber row linked to that user
+ * 1. Create Supabase Auth user without overriding current owner session
+ * 2. If user already exists, update role to BARBER or reactivate if deleted
+ * 3. Upload avatar if base64 image data provided
+ * 4. Create/link Barber row
  */
 export const addBarber = async (input: AddBarberInput): Promise<{ success: boolean; error?: string }> => {
-  const DEFAULT_PASSWORD = "password123";
-  const emailClean = input.email.trim().toLowerCase();
-  const firstName = input.name.trim().split(" ")[0];
-  const lastName = input.name.trim().split(" ").slice(1).join(" ") || " ";
+  try {
+    const DEFAULT_PASSWORD = input.password?.trim() || "password123";
+    const emailClean = input.email.trim().toLowerCase();
+    const nameTrimmed = input.name.trim();
+    const nameParts = nameTrimmed.split(/\s+/);
+    const firstName = nameParts[0] || "ช่าง";
+    const lastName = nameParts.slice(1).join(" ") || " ";
 
-  // 1. Create Auth user via signUp (client-side SDK)
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email: emailClean,
-    password: DEFAULT_PASSWORD,
-    options: { data: { firstName, lastName, role: "BARBER" } },
-  });
+    if (!emailClean || !emailClean.includes("@")) {
+      return { success: false, error: "กรุณาระบุอีเมลให้ถูกต้อง" };
+    }
 
-  if (authError) {
-    return { success: false, error: authError.message };
+    let userId: string | null = null;
+
+    // 1. Create Auth user via isolated client (avoids logging out the owner)
+    const { data: authData, error: authError } = await authAdminClient.auth.signUp({
+      email: emailClean,
+      password: DEFAULT_PASSWORD,
+      options: { data: { firstName, lastName, role: "BARBER" } },
+    });
+
+    if (authError) {
+      const errMsg = authError.message.toLowerCase();
+      // If user already registered in auth, check if existing record can be converted to barber
+      if (
+        errMsg.includes("already registered") ||
+        errMsg.includes("user_already_exists") ||
+        (authError as any).status === 422
+      ) {
+        const { data: existingUser } = await supabase
+          .from("User")
+          .select("id, role, firstName, lastName")
+          .eq("email", emailClean)
+          .maybeSingle();
+
+        if (existingUser) {
+          // Check if already in Barber table
+          const { data: existingBarber } = await supabase
+            .from("Barber")
+            .select("id, isActive, avatar")
+            .eq("userId", existingUser.id)
+            .maybeSingle();
+
+          if (existingBarber) {
+            if (existingBarber.isActive) {
+              return { success: false, error: "อีเมลนี้ลงทะเบียนเป็นช่างในระบบอยู่แล้ว" };
+            } else {
+              // Reactivate soft-deleted barber
+              let avatarUrl = existingBarber.avatar;
+              if (input.avatar && input.avatar.startsWith("data:image")) {
+                const uploaded = await uploadBarberAvatar(existingBarber.id, input.avatar);
+                if (uploaded) avatarUrl = uploaded;
+              }
+
+              await supabase.from("Barber").update({
+                specialties: input.specialty || "",
+                phone: input.phone || null,
+                avatar: avatarUrl,
+                isActive: true,
+                updatedAt: new Date().toISOString(),
+              }).eq("id", existingBarber.id);
+
+              await supabase.from("User").update({
+                role: "BARBER",
+                firstName,
+                lastName,
+                updatedAt: new Date().toISOString(),
+              }).eq("id", existingUser.id);
+
+              return { success: true };
+            }
+          }
+
+          // User exists in User table (e.g. was customer), convert to barber
+          userId = existingUser.id;
+        } else {
+          return { success: false, error: "อีเมลนี้มีอยู่ในระบบแล้ว กรุณาใช้อีเมลอื่น" };
+        }
+      } else if (errMsg.includes("rate limit") || errMsg.includes("over_email_send_rate_limit")) {
+        return { success: false, error: "ระบบส่งอีเมลยืนยันเกินสิทธิ์ชั่วคราว กรุณารอสักครู่แล้วลองใหม่อีกครั้ง" };
+      } else {
+        return { success: false, error: "สร้างบัญชีช่างไม่สำเร็จ: " + authError.message };
+      }
+    } else {
+      userId = authData?.user?.id || null;
+    }
+
+    if (!userId) {
+      return { success: false, error: "ไม่สามารถสร้างบัญชีผู้ใช้ได้" };
+    }
+
+    // 2. Create or update User row
+    const { error: userError } = await supabase.from("User").upsert({
+      id: userId,
+      email: emailClean,
+      password: DEFAULT_PASSWORD,
+      firstName,
+      lastName,
+      role: "BARBER",
+      updatedAt: new Date().toISOString(),
+    }, { onConflict: "id" });
+
+    if (userError) {
+      console.error("User row error:", userError.message);
+      return { success: false, error: "บันทึกข้อมูลผู้ใช้ไม่สำเร็จ: " + userError.message };
+    }
+
+    // 3. Create Barber row and handle avatar upload if needed
+    const barberId = generateUUID();
+    let finalAvatarUrl = input.avatar || null;
+    if (finalAvatarUrl && finalAvatarUrl.startsWith("data:image")) {
+      const uploaded = await uploadBarberAvatar(barberId, finalAvatarUrl);
+      if (uploaded) finalAvatarUrl = uploaded;
+    }
+
+    const { error: barberError } = await supabase.from("Barber").insert({
+      id: barberId,
+      userId,
+      specialties: input.specialty || "",
+      phone: input.phone || null,
+      avatar: finalAvatarUrl,
+      isActive: true,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (barberError) {
+      console.error("Barber row error:", barberError.message);
+      return { success: false, error: "บันทึกข้อมูลช่างไม่สำเร็จ: " + barberError.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error("addBarber unexpected error:", err);
+    return { success: false, error: err.message || "เกิดข้อผิดพลาดในการเพิ่มช่าง" };
   }
-
-  const userId = authData?.user?.id;
-  if (!userId) {
-    return { success: false, error: "ไม่สามารถสร้างบัญชีผู้ใช้ได้" };
-  }
-
-  // 2. Create User row
-  const { error: userError } = await supabase.from("User").upsert({
-    id: userId,
-    email: emailClean,
-    password: DEFAULT_PASSWORD,
-    firstName,
-    lastName,
-    role: "BARBER",
-    updatedAt: new Date().toISOString(),
-  }, { onConflict: "id" });
-
-  if (userError) {
-    console.error("User row error:", userError.message);
-    return { success: false, error: "บันทึกข้อมูลผู้ใช้ไม่สำเร็จ: " + userError.message };
-  }
-
-  // 3. Create Barber row
-  const barberId = generateUUID();
-  const { error: barberError } = await supabase.from("Barber").insert({
-    id: barberId,
-    userId,
-    specialties: input.specialty || "",
-    phone: input.phone || null,
-    avatar: input.avatar || null,
-    isActive: true,
-    updatedAt: new Date().toISOString(),
-  });
-
-  if (barberError) {
-    console.error("Barber row error:", barberError.message);
-    return { success: false, error: "บันทึกข้อมูลช่างไม่สำเร็จ: " + barberError.message };
-  }
-
-  return { success: true };
 };
 
 /**
  * Soft-delete a barber by setting isActive = false on both Barber and User rows
  */
 export const deleteBarber = async (barberId: string): Promise<{ success: boolean; error?: string }> => {
-  // Get userId from Barber row first
-  const { data: barberData, error: fetchError } = await supabase
-    .from("Barber")
-    .select("userId")
-    .eq("id", barberId)
-    .single();
+  try {
+    // Get userId from Barber row first
+    const { data: barberData, error: fetchError } = await supabase
+      .from("Barber")
+      .select("userId")
+      .eq("id", barberId)
+      .single();
 
-  if (fetchError || !barberData) {
-    return { success: false, error: "ไม่พบข้อมูลช่าง" };
+    if (fetchError || !barberData) {
+      return { success: false, error: "ไม่พบข้อมูลช่าง" };
+    }
+
+    // Soft-delete Barber
+    const { error: barberError } = await supabase
+      .from("Barber")
+      .update({ isActive: false, updatedAt: new Date().toISOString() })
+      .eq("id", barberId);
+
+    if (barberError) {
+      return { success: false, error: barberError.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "ไม่สามารถลบช่างได้" };
   }
-
-  // Soft-delete Barber
-  const { error: barberError } = await supabase
-    .from("Barber")
-    .update({ isActive: false, updatedAt: new Date().toISOString() })
-    .eq("id", barberId);
-
-  if (barberError) {
-    return { success: false, error: barberError.message };
-  }
-
-  return { success: true };
 };
 
 export interface DashboardStats {
@@ -120,14 +229,7 @@ export interface BarberStat {
   percentage: number;
 }
 
-// Generate a UUID (React Native compatible fallback)
-const generateUUID = () => {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
+// (generateUUID is defined at top of file)
 
 /**
  * Manage Services (Owner)
@@ -290,14 +392,15 @@ export const getStaff = async (): Promise<StaffMember[]> => {
       isActive,
       User!userId (firstName, lastName, role, email),
       BarberCustomerLink (count)
-    `);
+    `)
+    .eq("isActive", true);
 
   if (error) {
     console.error("Error fetching staff:", error);
     return [];
   }
 
-  return data.map((b: any) => ({
+  return (data || []).map((b: any) => ({
     id: b.id,
     name: b.User ? `${b.User.firstName} ${b.User.lastName}`.trim() : "Unknown",
     email: b.User?.email || "",
@@ -418,10 +521,13 @@ export const unlinkCustomerFromBarber = async (barberId: string, customerId: str
 export const uploadBarberAvatar = async (barberId: string, base64: string, ext: string = "jpg"): Promise<string | null> => {
   try {
     const fileName = `${barberId}-${Date.now()}.${ext}`;
+    const cleanBase64 = base64.includes(",") ? base64.split(",")[1] : base64;
+    const arrayBuffer = decode(cleanBase64);
+
     const { data, error } = await supabase.storage
       .from('avatars')
-      .upload(`barbers/${fileName}`, decodeBase64(base64), {
-        contentType: `image/${ext}`,
+      .upload(`barbers/${fileName}`, arrayBuffer, {
+        contentType: `image/${ext === "jpg" ? "jpeg" : ext}`,
         upsert: true
       });
 
@@ -436,21 +542,10 @@ export const uploadBarberAvatar = async (barberId: string, base64: string, ext: 
       
     return publicUrl;
   } catch (err) {
-    console.error(err);
+    console.error("uploadBarberAvatar error:", err);
     return null;
   }
 };
-
-// Base64 helper for RN
-function decodeBase64(base64Str: string) {
-  const binaryString = atob(base64Str);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
 
 export const getReviews = async () => {
   const { data, error } = await supabase

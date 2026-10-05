@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { CustomButton } from "../../components/CustomButton";
 import { StaticBackground } from "../../components/StaticBackground";
 import { FontAwesome5 } from "@expo/vector-icons";
 import { loginUser, signInWithOAuth } from "../../services/authService";
+import { getShopInfo, ShopInfo, subscribeToShopUpdates } from "../../services/shopService";
 
 type LoginScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -31,6 +32,13 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [shopInfo, setShopInfo] = useState<ShopInfo | null>(null);
+
+  useEffect(() => {
+    getShopInfo().then(setShopInfo);
+    const unsubscribe = subscribeToShopUpdates(setShopInfo);
+    return () => unsubscribe();
+  }, []);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -49,7 +57,7 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
       } else if (userRole === "OWNER") {
         navigation.replace("OwnerMain");
       } else {
-        navigation.replace("CustomerMain");
+        navigation.replace("SelectShop");
       }
     } else {
       Alert.alert("เข้าสู่ระบบไม่สำเร็จ", result.error || "อีเมลหรือรหัสผ่านไม่ถูกต้อง");
@@ -62,7 +70,7 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
     setLoading(false);
     
     if (result.success && Platform.OS !== 'web') {
-      navigation.replace("CustomerMain");
+      navigation.replace("SelectShop");
     } else if (!result.success) {
       if (result.error !== "ยกเลิกการเข้าสู่ระบบ") {
         Alert.alert("เข้าสู่ระบบไม่สำเร็จ", result.error || "เกิดข้อผิดพลาด");
@@ -71,7 +79,13 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
   };
 
   return (
-    <StaticBackground source={require("../../../assets/barer.jpg")}>
+    <StaticBackground
+      source={
+        shopInfo?.coverUrl
+          ? { uri: shopInfo.coverUrl }
+          : require("../../../assets/barer.jpg")
+      }
+    >
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
@@ -81,13 +95,13 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
           <View style={styles.brandSection}>
             <View style={styles.logoBadge}>
               <Image 
-                source={require("../../../assets/sawasdee_logo.jpg")} 
+                source={require("../../../assets/app_logo.jpg")} 
                 style={{ width: 96, height: 96, borderRadius: 24 }} 
                 resizeMode="cover"
               />
             </View>
-            <Text style={styles.title}>Sawasdee club</Text>
-            <Text style={styles.subtitle}>ระบบจองคิวร้านสวัสดีคลับ</Text>
+            <Text style={styles.title}>จองคิวร้านตัดผม</Text>
+            <Text style={styles.subtitle}>ระบบค้นหาและจองคิวช่างตัดผมออนไลน์</Text>
           </View>
 
           {/* Card Form */}

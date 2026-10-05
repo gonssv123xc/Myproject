@@ -11,6 +11,9 @@ import {
   ImageBackground,
   Image,
   TextInput,
+  Platform,
+  useWindowDimensions,
+  KeyboardAvoidingView,
 } from "react-native";
 import { Plus, Trash2, User, X, Edit2, Upload, Search, Link2, Unlink } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
@@ -29,6 +32,9 @@ import { useFocusEffect } from "@react-navigation/native";
 
 export const StaffScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { width } = useWindowDimensions();
+  const isMobile = width < 720;
+
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -36,7 +42,7 @@ export const StaffScreen: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   // Form State
-  const [form, setForm] = useState({ name: "", email: "", specialty: "", phone: "", avatar: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", specialty: "", phone: "", avatar: "" });
   
   // Connection Manager State
   const [searchQuery, setSearchQuery] = useState("");
@@ -123,7 +129,7 @@ export const StaffScreen: React.FC = () => {
   };
 
   const openAddModal = () => {
-    setForm({ name: "", email: "", specialty: "", phone: "", avatar: "" });
+    setForm({ name: "", email: "", password: "", specialty: "", phone: "", avatar: "" });
     setEditingId(null);
     setLinkedCustomers([]);
     setSearchQuery("");
@@ -135,6 +141,7 @@ export const StaffScreen: React.FC = () => {
     setForm({ 
       name: staffMember.name, 
       email: staffMember.email, 
+      password: "",
       specialty: staffMember.experience,
       phone: staffMember.phone || "",
       avatar: staffMember.avatar || ""
@@ -147,63 +154,70 @@ export const StaffScreen: React.FC = () => {
   };
 
   const handleSaveStaff = async () => {
-    if (!form.name) {
+    if (!form.name.trim()) {
       Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอกชื่อ-นามสกุลช่าง");
       return;
     }
 
-    setSaving(true);
-    let finalAvatarUrl = form.avatar;
+    try {
+      setSaving(true);
+      let finalAvatarUrl = form.avatar;
 
-    if (editingId) {
-      // If editing and image is base64, upload it
-      if (form.avatar && form.avatar.startsWith("data:image")) {
-        const base64Data = form.avatar.split(",")[1];
-        const uploadedUrl = await uploadBarberAvatar(editingId, base64Data);
-        if (uploadedUrl) finalAvatarUrl = uploadedUrl;
+      if (editingId) {
+        // If editing and image is base64, upload it
+        if (form.avatar && form.avatar.startsWith("data:image")) {
+          const base64Data = form.avatar.split(",")[1];
+          const uploadedUrl = await uploadBarberAvatar(editingId, base64Data);
+          if (uploadedUrl) finalAvatarUrl = uploadedUrl;
+        }
+
+        const result = await updateBarber(editingId, {
+          name: form.name,
+          specialty: form.specialty,
+          phone: form.phone,
+          avatar: finalAvatarUrl,
+        });
+
+        if (!result.success) {
+          Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถอัปเดตข้อมูลได้");
+          return;
+        }
+        Alert.alert("สำเร็จ", "อัปเดตข้อมูลช่างเรียบร้อยแล้ว");
+      } else {
+        if (!form.email || !form.email.includes("@")) {
+          Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอกอีเมลที่ถูกต้องสำหรับช่างใหม่");
+          return;
+        }
+        
+        const result = await addBarber({
+          name: form.name,
+          email: form.email,
+          password: form.password?.trim() || "password123",
+          specialty: form.specialty,
+          phone: form.phone,
+          avatar: finalAvatarUrl,
+        });
+
+        if (!result.success) {
+          Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถเพิ่มช่างได้");
+          return;
+        }
+
+        const pwdUsed = form.password?.trim() || "password123";
+        Alert.alert(
+          "เพิ่มช่างสำเร็จ! 🎉",
+          `ช่าง "${form.name}" ถูกเพิ่มเรียบร้อยแล้ว\nอีเมล: ${form.email}\nรหัสผ่านเริ่มต้น: ${pwdUsed}\n(หากต้องการผูกลูกค้า กรุณากดแก้ไขช่างคนนี้)`
+        );
       }
-
-      const result = await updateBarber(editingId, {
-        name: form.name,
-        specialty: form.specialty,
-        phone: form.phone,
-        avatar: finalAvatarUrl,
-      });
-      setSaving(false);
       
-      if (!result.success) {
-        Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถอัปเดตข้อมูลได้");
-        return;
-      }
-    } else {
-      if (!form.email) {
-        Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอกอีเมลสำหรับช่างใหม่");
-        setSaving(false);
-        return;
-      }
-      
-      const result = await addBarber({
-        name: form.name,
-        email: form.email,
-        specialty: form.specialty,
-        phone: form.phone,
-        avatar: finalAvatarUrl, // New barbers won't have the uploaded URL initially due to ID generation inside addBarber, but for now we pass it (will need refactor for true avatar on create)
-      });
+      setModalVisible(false);
+      loadStaff(); 
+    } catch (err: any) {
+      console.error("handleSaveStaff error:", err);
+      Alert.alert("เกิดข้อผิดพลาด", err.message || "ไม่สามารถเพิ่มช่างได้");
+    } finally {
       setSaving(false);
-
-      if (!result.success) {
-        Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถเพิ่มช่างได้");
-        return;
-      }
-
-      Alert.alert(
-        "เพิ่มช่างสำเร็จ! 🎉",
-        `ช่าง ${form.name} ถูกเพิ่มเรียบร้อยแล้ว\n(หากต้องการผูกลูกค้า กรุณากดแก้ไขช่างคนนี้อีกครั้ง)`
-      );
     }
-    
-    setModalVisible(false);
-    loadStaff(); 
   };
 
   const handleDeleteStaff = (id: string, name: string) => {
@@ -213,7 +227,11 @@ export const StaffScreen: React.FC = () => {
         text: "ลบ", style: "destructive",
         onPress: async () => {
           const result = await deleteBarber(id);
-          if (!result.success) Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถลบช่างได้");
+          if (!result.success) {
+            Alert.alert("เกิดข้อผิดพลาด", result.error || "ไม่สามารถลบช่างได้");
+          } else {
+            loadStaff();
+          }
         },
       },
     ]);
@@ -245,7 +263,7 @@ export const StaffScreen: React.FC = () => {
         ) : (
           <View style={styles.staffGrid}>
             {staff.map((item) => (
-              <View key={item.id} style={styles.glassCard}>
+              <View key={item.id} style={[styles.glassCard, isMobile && styles.glassCardMobile]}>
                 <View style={styles.cardHeader}>
                   <View style={styles.avatarContainer}>
                     <Image 
@@ -267,17 +285,17 @@ export const StaffScreen: React.FC = () => {
 
                 <View style={styles.specialtiesBox}>
                   <Text style={styles.specialtiesText} numberOfLines={2}>
-                    Specialties: {item.experience !== "ไม่ระบุ" ? item.experience : "-"}
+                    ความเชี่ยวชาญ: {item.experience !== "ไม่ระบุ" ? item.experience : "-"}
                   </Text>
                 </View>
 
                 <View style={styles.cardFooter}>
                   <View style={{flexDirection: 'row', alignItems: 'center'}}>
                     <User size={16} color="#94A3B8" />
-                    <Text style={styles.customerCount}>{item.linkedCustomersCount} Customers</Text>
+                    <Text style={styles.customerCount}>{item.linkedCustomersCount} ลูกค้าที่ผูกไว้</Text>
                   </View>
                   <TouchableOpacity onPress={() => handleEdit(item)}>
-                    <Text style={styles.manageLinkText}>Manage Connections</Text>
+                    <Text style={styles.manageLinkText}>จัดการการเชื่อมต่อ</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -287,9 +305,12 @@ export const StaffScreen: React.FC = () => {
       </ScrollView>
 
       {/* Advanced Add/Edit Staff Modal */}
-      <Modal visible={modalVisible} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContentLarge}>
+      <Modal visible={modalVisible} animationType="fade" transparent onRequestClose={() => setModalVisible(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalContentLarge, isMobile && styles.modalContentMobile]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{editingId ? "แก้ไขข้อมูลช่าง" : "เพิ่มช่างตัดผมใหม่"}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
@@ -297,134 +318,147 @@ export const StaffScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalSplit}>
-              {/* Left Column */}
-              <View style={styles.leftCol}>
-                <View style={styles.avatarUploadSection}>
-                  <View style={styles.largeAvatarContainer}>
-                    {form.avatar ? (
-                      <Image source={{ uri: form.avatar }} style={{ width: '100%', height: '100%' }} />
-                    ) : (
-                      <User size={40} color="#475569" />
-                    )}
+            <ScrollView 
+              showsVerticalScrollIndicator={false} 
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 16 }}
+            >
+              <View style={[styles.modalSplit, isMobile && { flexDirection: 'column', gap: 12 }]}>
+                {/* Left Column */}
+                <View style={[styles.leftCol, isMobile && { maxWidth: '100%', width: '100%' }]}>
+                  <View style={[styles.avatarUploadSection, isMobile && { marginBottom: 12 }]}>
+                    <View style={[styles.largeAvatarContainer, isMobile && { width: 80, height: 80, borderRadius: 40, marginBottom: 8 }]}>
+                      {form.avatar ? (
+                        <Image source={{ uri: form.avatar }} style={{ width: '100%', height: '100%' }} />
+                      ) : (
+                        <User size={34} color="#475569" />
+                      )}
+                    </View>
+                    <TouchableOpacity style={styles.uploadBtn} onPress={pickImage}>
+                      <Upload size={15} color="#E2E8F0" />
+                      <Text style={styles.uploadBtnText}>เลือกรูปโปรไฟล์</Text>
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity style={styles.uploadBtn} onPress={pickImage}>
-                    <Upload size={16} color="#E2E8F0" />
-                    <Text style={styles.uploadBtnText}>อัปโหลดรูปภาพ</Text>
-                  </TouchableOpacity>
-                </View>
 
-                <CustomInput
-                  label="ความเชี่ยวชาญ / สไตล์ทรงผม"
-                  placeholder="เช่น [Modern Cut], [Crop Top]"
-                  value={form.specialty}
-                  onChangeText={(text) => setForm({ ...form, specialty: text })}
-                />
-              </View>
-
-              {/* Right Column */}
-              <View style={styles.rightCol}>
-                <View style={styles.rowInputs}>
-                  <View style={{flex: 1, marginRight: 8}}>
-                    <CustomInput
-                      label="ชื่อ-นามสกุลช่าง"
-                      placeholder="เช่น กาย ธันวา"
-                      value={form.name}
-                      onChangeText={(text) => setForm({ ...form, name: text })}
-                    />
-                  </View>
-                  <View style={{flex: 1, marginLeft: 8}}>
-                    <CustomInput
-                      label="เบอร์โทรศัพท์"
-                      placeholder="+66 8X-XXX-XXXX"
-                      value={form.phone}
-                      onChangeText={(text) => setForm({ ...form, phone: text })}
-                      keyboardType="phone-pad"
-                    />
-                  </View>
-                </View>
-
-                {!editingId && (
                   <CustomInput
-                    label="อีเมล (สำหรับช่างเข้าสู่ระบบ)"
-                    placeholder="guy@barber.com"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    value={form.email}
-                    onChangeText={(text) => setForm({ ...form, email: text })}
+                    label="ความเชี่ยวชาญ / สไตล์ทรงผม"
+                    placeholder="เช่น [Modern Cut], [Crop Top]"
+                    value={form.specialty}
+                    onChangeText={(text) => setForm({ ...form, specialty: text })}
                   />
-                )}
+                </View>
 
-                {editingId && (
-                  <View style={styles.connectionManager}>
-                    <Text style={styles.label}>ลิ้งกับข้อมูลลูกค้า</Text>
-                    <View style={styles.searchBar}>
-                      <Search size={18} color="#94A3B8" />
-                      <TextInput
-                        style={styles.searchInput}
-                        placeholder="ค้นหาและเลือกลูกค้า..."
-                        placeholderTextColor="#64748B"
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                      />
+                  {/* Right Column */}
+                  <View style={[styles.rightCol, isMobile && { width: '100%' }]}>
+                    <View style={[styles.rowInputs, isMobile && { flexDirection: 'column' }]}>
+                      <View style={{ flex: isMobile ? undefined : 1, marginRight: isMobile ? 0 : 8 }}>
+                        <CustomInput
+                          label="ชื่อ-นามสกุลช่าง"
+                          placeholder="เช่น กาย ธันวา"
+                          value={form.name}
+                          onChangeText={(text) => setForm({ ...form, name: text })}
+                        />
+                      </View>
+                      <View style={{ flex: isMobile ? undefined : 1, marginLeft: isMobile ? 0 : 8 }}>
+                        <CustomInput
+                          label="เบอร์โทรศัพท์"
+                          placeholder="+66 8X-XXX-XXXX"
+                          value={form.phone}
+                          onChangeText={(text) => setForm({ ...form, phone: text })}
+                          keyboardType="phone-pad"
+                        />
+                      </View>
                     </View>
 
-                    {/* Search Results Chips */}
-                    {searchResults.length > 0 && (
-                      <View style={styles.chipsContainer}>
-                        {searchResults.map(res => (
-                          <TouchableOpacity key={res.id} style={styles.chip} onPress={() => handleLink(res.id)}>
-                            <Image 
-                              source={{ uri: res.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(res.name)}&background=random` }} 
-                              style={styles.chipAvatar} 
-                            />
-                            <Text style={styles.chipText}>{res.name}</Text>
-                            <View style={styles.chipAddIcon}><Plus size={12} color="#FFFFFF" /></View>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
+                    {!editingId && (
+                      <>
+                        <CustomInput
+                          label="อีเมล (สำหรับช่างเข้าสู่ระบบ)"
+                          placeholder="guy@barber.com"
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                          value={form.email}
+                          onChangeText={(text) => setForm({ ...form, email: text })}
+                        />
+                        <CustomInput
+                          label="รหัสผ่าน (เว้นว่างไว้จะใช้ค่าเริ่มต้น: password123)"
+                          placeholder="••••••••"
+                          secureTextEntry
+                          value={form.password}
+                          onChangeText={(text) => setForm({ ...form, password: text })}
+                        />
+                      </>
                     )}
 
-                    <Text style={[styles.label, {marginTop: 16, marginBottom: 8}]}>ลูกค้าที่เชื่อมต่อ ({linkedCustomers.length})</Text>
-                    <ScrollView style={styles.linkedList}>
-                      {linkedCustomers.length === 0 ? (
-                        <Text style={{color: "#64748B", fontSize: 13}}>ยังไม่มีลูกค้าที่เชื่อมต่อ</Text>
-                      ) : (
-                        linkedCustomers.map(lc => (
-                          <View key={lc.id} style={styles.linkedRow}>
-                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                              <Image 
-                                source={{ uri: lc.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(lc.name)}&background=random` }} 
-                                style={styles.chipAvatar} 
-                              />
-                              <Text style={styles.linkedName}>ลูกค้า: {lc.name}</Text>
-                            </View>
-                            <TouchableOpacity style={styles.unlinkBtn} onPress={() => handleUnlink(lc.id)}>
-                              <Text style={styles.unlinkText}>ลบการเชื่อมต่อ</Text>
-                            </TouchableOpacity>
-                          </View>
-                        ))
-                      )}
-                    </ScrollView>
-                  </View>
-                )}
-                
-                <View style={{flex: 1}} /> {/* Spacer */}
-                
-                <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSaveStaff} disabled={saving} activeOpacity={0.8}>
-                  <LinearGradient colors={["#FBBF24", "#F59E0B"]} style={styles.saveBtnGrad}>
-                    {saving ? <ActivityIndicator size="small" color="#0F172A" /> : <Text style={styles.saveBtnText}>{editingId ? "บันทึกการแก้ไข" : "เพิ่มช่าง"}</Text>}
-                  </LinearGradient>
-                </TouchableOpacity>
+                    {editingId && (
+                      <View style={styles.connectionManager}>
+                        <Text style={styles.label}>ลิ้งกับข้อมูลลูกค้า</Text>
+                        <View style={styles.searchBar}>
+                          <Search size={18} color="#94A3B8" />
+                          <TextInput
+                            style={styles.searchInput}
+                            placeholder="ค้นหาและเลือกลูกค้า..."
+                            placeholderTextColor="#64748B"
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                          />
+                        </View>
 
-              </View>
+                        {/* Search Results Chips */}
+                        {searchResults.length > 0 && (
+                          <View style={styles.chipsContainer}>
+                            {searchResults.map(res => (
+                              <TouchableOpacity key={res.id} style={styles.chip} onPress={() => handleLink(res.id)}>
+                                <Image 
+                                  source={{ uri: res.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(res.name)}&background=random` }} 
+                                  style={styles.chipAvatar} 
+                                />
+                                <Text style={styles.chipText}>{res.name}</Text>
+                                <View style={styles.chipAddIcon}><Plus size={12} color="#FFFFFF" /></View>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        )}
+
+                        <Text style={[styles.label, {marginTop: 16, marginBottom: 8}]}>ลูกค้าที่เชื่อมต่อ ({linkedCustomers.length})</Text>
+                        <ScrollView style={styles.linkedList} nestedScrollEnabled>
+                          {linkedCustomers.length === 0 ? (
+                            <Text style={{color: "#64748B", fontSize: 13}}>ยังไม่มีลูกค้าที่เชื่อมต่อ</Text>
+                          ) : (
+                            linkedCustomers.map(lc => (
+                              <View key={lc.id} style={styles.linkedRow}>
+                                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                                  <Image 
+                                    source={{ uri: lc.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(lc.name)}&background=random` }} 
+                                    style={styles.chipAvatar} 
+                                  />
+                                  <Text style={styles.linkedName}>ลูกค้า: {lc.name}</Text>
+                                </View>
+                                <TouchableOpacity style={styles.unlinkBtn} onPress={() => handleUnlink(lc.id)}>
+                                  <Text style={styles.unlinkText}>ลบการเชื่อมต่อ</Text>
+                                </TouchableOpacity>
+                              </View>
+                            ))
+                          )}
+                        </ScrollView>
+                      </View>
+                    )}
+                    
+                    <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSaveStaff} disabled={saving} activeOpacity={0.8}>
+                      <LinearGradient colors={["#FBBF24", "#F59E0B"]} style={styles.saveBtnGrad}>
+                        {saving ? <ActivityIndicator size="small" color="#0F172A" /> : <Text style={styles.saveBtnText}>{editingId ? "บันทึกการแก้ไข" : "เพิ่มช่าง"}</Text>}
+                      </LinearGradient>
+                    </TouchableOpacity>
+
+                  </View>
+                </View>
+              </ScrollView>
             </View>
-          </View>
-        </View>
-      </Modal>
-    </ImageBackground>
-  );
-};
+          </KeyboardAvoidingView>
+        </Modal>
+      </ImageBackground>
+    );
+  };
 
 const styles = StyleSheet.create({
   container: { flex: 1, width: "100%", height: "100%" },
@@ -441,7 +475,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(30, 41, 59, 0.6)", 
     borderRadius: 16, padding: 16, marginBottom: 16, 
     borderWidth: 1, borderColor: "rgba(255, 255, 255, 0.08)",
-    width: "48%" // For grid layout, assuming tablet/web or large screen. Can use 100% for small mobile
+    width: "48%",
+  },
+  glassCardMobile: {
+    width: "100%",
+    marginBottom: 12,
+    padding: 14,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   avatarContainer: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'rgba(255,255,255,0.05)', overflow: 'hidden', borderWidth: 2, borderColor: colors.primary },
@@ -456,20 +495,21 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: "center", justifyContent: "center", paddingVertical: 40 },
   
   // Modal Styles
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", alignItems: "center", padding: 20 },
-  modalContentLarge: { backgroundColor: "#1E293B", borderRadius: 24, borderWidth: 1, borderColor: "rgba(255, 255, 255, 0.1)", padding: 24, width: '100%', maxWidth: 800, maxHeight: '90%' },
-  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
-  modalTitle: { fontSize: 20, fontWeight: "bold", color: "#FFFFFF" },
-  closeBtn: { padding: 4, backgroundColor: "rgba(255, 255, 255, 0.05)", borderRadius: 12 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.78)", justifyContent: "center", alignItems: "center", padding: 16 },
+  modalContentLarge: { backgroundColor: "#1E293B", borderRadius: 24, borderWidth: 1, borderColor: "rgba(255, 255, 255, 0.1)", padding: 24, width: '100%', maxWidth: 750, maxHeight: '90%' },
+  modalContentMobile: { width: "100%", maxHeight: "92%", padding: 16, borderRadius: 20 },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: "bold", color: "#FFFFFF" },
+  closeBtn: { padding: 6, backgroundColor: "rgba(255, 255, 255, 0.08)", borderRadius: 12 },
   
-  modalSplit: { flexDirection: 'row', gap: 24 },
-  leftCol: { flex: 1, maxWidth: 250 },
+  modalSplit: { flexDirection: 'row', gap: 20 },
+  leftCol: { flex: 1, maxWidth: 240 },
   rightCol: { flex: 2 },
   
-  avatarUploadSection: { alignItems: 'center', marginBottom: 24 },
-  largeAvatarContainer: { width: 100, height: 100, borderRadius: 50, backgroundColor: 'rgba(255,255,255,0.05)', overflow: 'hidden', borderWidth: 2, borderColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  uploadBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12 },
-  uploadBtnText: { color: "#E2E8F0", fontSize: 13 },
+  avatarUploadSection: { alignItems: 'center', marginBottom: 20 },
+  largeAvatarContainer: { width: 90, height: 90, borderRadius: 45, backgroundColor: 'rgba(255,255,255,0.05)', overflow: 'hidden', borderWidth: 2, borderColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  uploadBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 10 },
+  uploadBtnText: { color: "#E2E8F0", fontSize: 13, fontWeight: "600" },
   
   rowInputs: { flexDirection: 'row', justifyContent: 'space-between' },
   
@@ -490,8 +530,8 @@ const styles = StyleSheet.create({
   unlinkBtn: { backgroundColor: "rgba(255,255,255,0.05)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   unlinkText: { color: "#94A3B8", fontSize: 12 },
   
-  saveBtn: { width: "100%", borderRadius: 12, overflow: "hidden", marginTop: 24 },
+  saveBtn: { width: "100%", borderRadius: 12, overflow: "hidden", marginTop: 20 },
   saveBtnGrad: { paddingVertical: 14, alignItems: "center", justifyContent: "center" },
-  saveBtnText: { color: "#0F172A", fontSize: 16, fontWeight: "bold" },
+  saveBtnText: { color: "#0F172A", fontSize: 15, fontWeight: "bold" },
 });
 

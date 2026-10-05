@@ -17,7 +17,30 @@ export interface Service {
   name: string;
   price: number;
   duration: string;
+  durationMinutes?: number;
 }
+
+/**
+ * Format minutes into readable Thai duration with hours and minutes
+ * e.g. 90 -> "1 ชั่วโมง 30 นาที", 60 -> "1 ชั่วโมง", 30 -> "30 นาที"
+ */
+export const formatDuration = (totalMinutes: number | string): string => {
+  const mins = typeof totalMinutes === "string" 
+    ? parseInt(totalMinutes.replace(/[^0-9]/g, ""), 10) || 0 
+    : totalMinutes;
+    
+  if (!mins || mins <= 0) return "0 นาที";
+  const hours = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  
+  if (hours > 0 && remainingMins > 0) {
+    return `${hours} ชั่วโมง ${remainingMins} นาที`;
+  } else if (hours > 0) {
+    return `${hours} ชั่วโมง`;
+  } else {
+    return `${remainingMins} นาที`;
+  }
+};
 
 export interface Booking {
   id: string;
@@ -53,11 +76,12 @@ export const getServices = async (): Promise<Service[]> => {
     return [];
   }
 
-  return data.map((s: any) => ({
+  return (data || []).map((s: any) => ({
     id: s.id,
     name: s.name,
     price: s.price,
-    duration: `${s.duration} นาที`,
+    duration: formatDuration(s.duration),
+    durationMinutes: Number(s.duration) || 0,
   }));
 };
 
@@ -164,7 +188,31 @@ const generateUUID = () => {
 };
 
 /**
- * Create a new booking
+ * Break down a time range into 30-minute slots
+ * e.g. "10:00" to "11:30" => ["10:00", "10:30", "11:00"]
+ */
+export const getSlotsBetween = (startTime: string, endTime: string): string[] => {
+  if (!startTime) return [];
+  const slots: string[] = [];
+  const [sH, sM] = startTime.split(":").map(Number);
+  const [eH, eM] = (endTime || startTime).split(":").map(Number);
+  const startMins = sH * 60 + (sM || 0);
+  const endMins = eH * 60 + (eM || 0);
+
+  if (endMins <= startMins) {
+    return [startTime];
+  }
+
+  for (let m = startMins; m < endMins; m += 30) {
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    slots.push(`${hh}:${mm}`);
+  }
+  return slots.length > 0 ? slots : [startTime];
+};
+
+/**
+ * Create a new booking with strict anti-double-booking validation
  */
 export const createBooking = async (bookingData: {
   customerId: string;
@@ -180,6 +228,67 @@ export const createBooking = async (bookingData: {
   referenceImageUri?: string;
 }): Promise<{ success: boolean; error?: string; bookingId?: string }> => {
   
+  const dateStr = bookingData.date.includes("T") ? bookingData.date.split("T")[0] : bookingData.date;
+  const startOfDay = `${dateStr}T00:00:00`;
+  const endOfDay = `${dateStr}T23:59:59.999`;
+  const newSlots = getSlotsBetween(bookingData.startTime, bookingData.endTime);
+
+  // 1. Double Booking Check for Barber: Is this time slot already taken?
+  const { data: existingBarberBookings, error: checkBarberError } = await supabase
+    .from("Booking")
+    .select("id, startTime, endTime, status, createdAt")
+    .eq("barberId", bookingData.barberId)
+    .gte("date", startOfDay)
+    .lte("date", endOfDay)
+    .in("status", ["PENDING", "PENDING_PAYMENT", "CONFIRMED", "IN_PROGRESS"]);
+
+  if (!checkBarberError && existingBarberBookings && existingBarberBookings.length > 0) {
+    const activeConflicts = existingBarberBookings.filter((b: any) => {
+      if (b.status === "PENDING_PAYMENT") {
+        return new Date().getTime() - new Date(b.createdAt).getTime() <= 15 * 60 * 1000;
+      }
+      return true;
+    });
+
+    for (const b of activeConflicts) {
+      const bSlots = getSlotsBetween(b.startTime, b.endTime || b.startTime);
+      if (newSlots.some((s) => bSlots.includes(s))) {
+        return {
+          success: false,
+          error: `ช่วงเวลา ${bookingData.startTime} - ${bookingData.endTime} น. ถูกจองไปแล้ว กรุณาเลือกเวลาอื่น`,
+        };
+      }
+    }
+  }
+
+  // 2. Double Booking Check for Customer: Does this customer already have an active booking at the same time?
+  const { data: existingCustomerBookings } = await supabase
+    .from("Booking")
+    .select("id, startTime, endTime, status, createdAt")
+    .eq("customerId", bookingData.customerId)
+    .gte("date", startOfDay)
+    .lte("date", endOfDay)
+    .in("status", ["PENDING", "PENDING_PAYMENT", "CONFIRMED", "IN_PROGRESS"]);
+
+  if (existingCustomerBookings && existingCustomerBookings.length > 0) {
+    const activeCust = existingCustomerBookings.filter((b: any) => {
+      if (b.status === "PENDING_PAYMENT") {
+        return new Date().getTime() - new Date(b.createdAt).getTime() <= 15 * 60 * 1000;
+      }
+      return true;
+    });
+
+    for (const b of activeCust) {
+      const bSlots = getSlotsBetween(b.startTime, b.endTime || b.startTime);
+      if (newSlots.some((s) => bSlots.includes(s))) {
+        return {
+          success: false,
+          error: `คุณมีรายการจองเวลา ${b.startTime} น. อยู่แล้ว ไม่สามารถจองซ้ำในช่วงเวลาเดียวกันได้`,
+        };
+      }
+    }
+  }
+
   const bookingId = generateUUID();
   let uploadedReferenceUrl = null;
 
@@ -209,12 +318,15 @@ export const createBooking = async (bookingData: {
     }
   }
 
+  // Normalized date for consistent querying
+  const normalizedDate = `${dateStr}T${bookingData.startTime}:00.000Z`;
+
   const { error } = await supabase.from("Booking").insert({
     id: bookingId,
     customerId: bookingData.customerId,
     barberId: bookingData.barberId,
     serviceId: bookingData.serviceId,
-    date: bookingData.date,
+    date: normalizedDate,
     startTime: bookingData.startTime,
     endTime: bookingData.endTime,
     notes: bookingData.notes,
@@ -230,6 +342,9 @@ export const createBooking = async (bookingData: {
 
   if (error) {
     console.error("Error creating booking:", error.message);
+    if (error.code === "23505" || error.message?.toLowerCase().includes("unique") || error.message?.toLowerCase().includes("duplicate")) {
+      return { success: false, error: "ช่วงเวลานี้เพิ่งถูกจองไปแล้ว กรุณาเลือกเวลาอื่น" };
+    }
     return { success: false, error: error.message };
   }
 
@@ -438,11 +553,16 @@ export const getBookedSlots = async (
   barberId: string,
   date: string
 ): Promise<string[]> => {
+  const dateStr = date.includes("T") ? date.split("T")[0] : date;
+  const startOfDay = `${dateStr}T00:00:00`;
+  const endOfDay = `${dateStr}T23:59:59.999`;
+
   const { data, error } = await supabase
     .from("Booking")
-    .select("startTime, status, createdAt")
+    .select("startTime, endTime, status, createdAt")
     .eq("barberId", barberId)
-    .eq("date", date)
+    .gte("date", startOfDay)
+    .lte("date", endOfDay)
     .in("status", ["PENDING", "PENDING_PAYMENT", "CONFIRMED", "IN_PROGRESS"]);
 
   if (error) {
@@ -450,13 +570,45 @@ export const getBookedSlots = async (
     return [];
   }
 
-  return data.filter((b: any) => {
+  // Filter out expired PENDING_PAYMENT (older than 15 mins)
+  const activeBookings = (data || []).filter((b: any) => {
     if (b.status === "PENDING_PAYMENT") {
       const isExpired = new Date().getTime() - new Date(b.createdAt).getTime() > 15 * 60 * 1000;
       return !isExpired;
     }
     return true;
-  }).map((b: any) => b.startTime);
+  });
+
+  const occupiedSlots = new Set<string>();
+  for (const b of activeBookings) {
+    if (b.startTime) {
+      occupiedSlots.add(b.startTime);
+      const slots = getSlotsBetween(b.startTime, b.endTime || b.startTime);
+      slots.forEach((s) => occupiedSlots.add(s));
+    }
+  }
+
+  return Array.from(occupiedSlots);
+};
+
+/**
+ * Subscribe to real-time changes on the Booking table
+ */
+export const subscribeToBookings = (onUpdate: () => void) => {
+  const channel = supabase
+    .channel(`bookings_realtime_${Date.now()}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "Booking" },
+      () => {
+        onUpdate();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 };
 
 /**

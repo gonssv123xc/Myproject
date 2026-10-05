@@ -8,12 +8,14 @@ interface CustomHeaderProps {
   title?: string;
   roleLabel?: string;
   onLogout?: () => void;
+  logoSource?: any;
 }
 
 export const CustomHeader: React.FC<CustomHeaderProps> = ({
-  title = "Sawasdee club",
+  title = "ร้านตัดผม",
   roleLabel,
   onLogout,
+  logoSource,
 }) => {
   const { width } = useWindowDimensions();
   const isDesktop = width > 768;
@@ -26,7 +28,7 @@ export const CustomHeader: React.FC<CustomHeaderProps> = ({
         <View style={styles.leftSection}>
           <View style={styles.logoContainer}>
             <Image 
-              source={require("../../assets/sawasdee_logo.jpg")} 
+              source={logoSource || require("../../assets/sawasdee_logo.jpg")} 
               style={{ width: "100%", height: "100%", borderRadius: 8 }} 
               resizeMode="cover" 
             />

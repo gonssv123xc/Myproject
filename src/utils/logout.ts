@@ -1,9 +1,11 @@
 import { Alert, Platform } from "react-native";
 import { supabase } from "../services/supabase";
+import { navigationRef, resetToRoot } from "../navigation/navigationRef";
+import { RootStackParamList } from "../types/navigation";
 
 export const confirmLogout = (
-  navigation: any,
-  targetScreen: "Login" | "StaffLogin" = "Login"
+  navigation?: any,
+  targetScreen: keyof RootStackParamList = "Login"
 ) => {
   const doLogout = async () => {
     try {
@@ -11,11 +13,32 @@ export const confirmLogout = (
     } catch (e) {
       console.log("Error signing out:", e);
     }
-    const rootNav = navigation.getParent?.() || navigation;
-    rootNav.reset({
-      index: 0,
-      routes: [{ name: targetScreen }],
-    });
+
+    try {
+      if (navigationRef.isReady()) {
+        resetToRoot(targetScreen);
+        return;
+      }
+
+      let rootNav = navigation;
+      while (rootNav?.getParent?.()) {
+        rootNav = rootNav.getParent();
+      }
+
+      if (rootNav?.reset) {
+        rootNav.reset({
+          index: 0,
+          routes: [{ name: targetScreen }],
+        });
+      } else if (rootNav?.navigate) {
+        rootNav.navigate(targetScreen);
+      }
+    } catch (navErr) {
+      console.error("Logout navigation reset error:", navErr);
+      if (navigation?.navigate) {
+        navigation.navigate(targetScreen);
+      }
+    }
   };
 
   if (Platform.OS === "web") {

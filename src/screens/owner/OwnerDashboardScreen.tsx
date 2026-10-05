@@ -5,17 +5,20 @@ import {
   StyleSheet,
   ScrollView,
   ImageBackground,
+  Image,
   TouchableOpacity,
   Modal,
   ActivityIndicator
 } from "react-native";
-import { DollarSign, Users, Calendar, TrendingUp, ChevronDown, ChevronUp, X } from "lucide-react-native";
+import { DollarSign, Users, Calendar, TrendingUp, ChevronDown, ChevronUp, X, Edit3, Store } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { colors } from "../../theme/colors";
 import { CustomHeader } from "../../components/CustomHeader";
 import { confirmLogout } from "../../utils/logout";
 import { getDashboardStats, DashboardStats, getSubmittedWorks, SubmittedWorkItem, getDetailedBookings, getAllCustomersDetailed, getBarberDetailedBookings } from "../../services/ownerService";
+import { getShopInfo, ShopInfo, subscribeToShopUpdates } from "../../services/shopService";
+import { ShopSettingsModal } from "../../components/ShopSettingsModal";
 import { useFocusEffect } from "@react-navigation/native";
 
 export const OwnerDashboardScreen: React.FC = () => {
@@ -83,24 +86,39 @@ export const OwnerDashboardScreen: React.FC = () => {
     return Object.values(groups).sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [submittedWorks]);
 
+  // Shop Settings states
+  const [shopSettingsVisible, setShopSettingsVisible] = React.useState(false);
+  const [shopInfo, setShopInfo] = React.useState<ShopInfo | null>(null);
+
   useFocusEffect(
     React.useCallback(() => {
       let isActive = true;
       const loadStats = async () => {
         setLoading(true);
-        const [data, works] = await Promise.all([
+        const [data, works, shop] = await Promise.all([
           getDashboardStats(),
-          getSubmittedWorks(50)
+          getSubmittedWorks(50),
+          getShopInfo()
         ]);
         if (isActive) {
           setDashboardData(data);
           setSubmittedWorks(works);
+          setShopInfo(shop);
           setLoading(false);
         }
       };
       
       loadStats();
-      return () => { isActive = false; };
+
+      // Realtime sync for shop profile updates
+      const unsubscribe = subscribeToShopUpdates((updated) => {
+        if (isActive) setShopInfo(updated);
+      });
+
+      return () => { 
+        isActive = false; 
+        unsubscribe();
+      };
     }, [])
   );
 
@@ -124,7 +142,11 @@ export const OwnerDashboardScreen: React.FC = () => {
 
   return (
     <ImageBackground
-      source={require("../../../assets/13.jpg")}
+      source={
+        shopInfo?.coverUrl
+          ? { uri: shopInfo.coverUrl }
+          : require("../../../assets/13.jpg")
+      }
       style={styles.container}
       resizeMode="cover"
     >
@@ -132,6 +154,64 @@ export const OwnerDashboardScreen: React.FC = () => {
       <CustomHeader roleLabel="เจ้าของร้าน" onLogout={() => confirmLogout(navigation, "StaffLogin")} />
       
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Shop Profile & Settings Card */}
+        <LinearGradient
+          colors={["rgba(30, 41, 59, 0.95)", "rgba(15, 23, 42, 0.95)"]}
+          style={styles.shopCard}
+        >
+          <View style={styles.shopCardTop}>
+            <View style={styles.shopLogoWrap}>
+              {shopInfo?.logoUrl ? (
+                <Image source={{ uri: shopInfo.logoUrl }} style={styles.shopLogo} resizeMode="cover" />
+              ) : (
+                <Image
+                  source={require("../../../assets/sawasdee_logo.jpg")}
+                  style={styles.shopLogo}
+                  resizeMode="cover"
+                />
+              )}
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <View style={styles.shopBadgeRow}>
+                <View style={styles.shopLiveDot} />
+                <Text style={styles.shopBadgeText}>ร้านค้าที่จัดการอยู่</Text>
+              </View>
+              <Text style={styles.shopName} numberOfLines={1}>
+                {shopInfo?.name || "ร้านตัดผม"}
+              </Text>
+              <Text style={styles.shopSub} numberOfLines={1}>
+                {shopInfo?.subtitle || "ระบบจองคิวออนไลน์"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.shopCardDivider} />
+
+          <View style={styles.shopCardBottom}>
+            <View style={styles.shopContactCol}>
+              <Text style={styles.shopContactText} numberOfLines={1}>
+                📞 {shopInfo?.phone || "090-360-3093"}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.editShopBtn}
+              activeOpacity={0.85}
+              onPress={() => setShopSettingsVisible(true)}
+            >
+              <LinearGradient
+                colors={["#FBBF24", "#F59E0B"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.editShopBtnGrad}
+              >
+                <Edit3 size={14} color="#0F172A" />
+                <Text style={styles.editShopBtnText}>เปลี่ยนชื่อ / รูปภาพร้าน</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </LinearGradient>
+
         <Text style={styles.title}>แดชบอร์ดภาพรวม</Text>
 
         {/* Stats Grid */}
@@ -258,7 +338,7 @@ export const OwnerDashboardScreen: React.FC = () => {
                         <DollarSign size={18} color="#10B981" />
                       </View>
                       <View style={{ flex: 1, marginLeft: 12 }}>
-                        <Text style={{ fontSize: 15, fontWeight: "bold", color: "#FFFFFF" }}>ช่าง{group.barberName}</Text>
+                        <Text style={{ fontSize: 15, fontWeight: "bold", color: "#FFFFFF" }}>{group.barberName}</Text>
                         <Text style={{ fontSize: 12, color: "#94A3B8" }}>ส่งยอด {group.items.length} รายการ</Text>
                       </View>
                       <View style={{ alignItems: "flex-end", marginRight: 12 }}>
@@ -300,7 +380,7 @@ export const OwnerDashboardScreen: React.FC = () => {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                {modalType === "customers" ? "รายชื่อลูกค้าทั้งหมด" : modalType === "today" ? "รายการจองวันนี้" : modalType === "barber" ? `ผลงานช่าง${selectedBarberName}` : "รายการจองเดือนนี้"}
+                {modalType === "customers" ? "รายชื่อลูกค้าทั้งหมด" : modalType === "today" ? "รายการจองวันนี้" : modalType === "barber" ? `ผลงาน: ${selectedBarberName}` : "รายการจองเดือนนี้"}
               </Text>
               <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
                 <X color="#94A3B8" size={24} />
@@ -347,7 +427,7 @@ export const OwnerDashboardScreen: React.FC = () => {
                         <View style={{ flex: 2 }}>
                           <Text style={{ color: "#FFF", fontWeight: 'bold', fontSize: 13 }}>{b.customerName}</Text>
                           <Text style={{ color: "#94A3B8", fontSize: 11 }}>
-                            {modalType === "barber" ? b.serviceName : `ช่าง${b.barberName} • ${b.serviceName}`}
+                            {modalType === "barber" ? b.serviceName : `${b.barberName} • ${b.serviceName}`}
                           </Text>
                         </View>
                         <View style={{ flex: 1.5, justifyContent: 'center' }}>
@@ -367,6 +447,13 @@ export const OwnerDashboardScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Shop Profile & Photos Settings Modal */}
+      <ShopSettingsModal
+        visible={shopSettingsVisible}
+        onClose={() => setShopSettingsVisible(false)}
+        onSaved={(updated) => setShopInfo(updated)}
+      />
     </ImageBackground>
   );
 };
@@ -604,5 +691,98 @@ const styles = StyleSheet.create({
   tableCell: {
     fontSize: 13,
     color: "#E2E8F0",
+  },
+  // Shop Card Styles
+  shopCard: {
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  shopCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  shopLogoWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    overflow: "hidden",
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+  },
+  shopLogo: {
+    width: "100%",
+    height: "100%",
+  },
+  shopBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 2,
+  },
+  shopLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: "#10B981",
+  },
+  shopBadgeText: {
+    fontSize: 11,
+    color: "#10B981",
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  shopName: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  shopSub: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  shopCardDivider: {
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginVertical: 12,
+  },
+  shopCardBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  shopContactCol: {
+    flex: 1,
+  },
+  shopContactText: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  editShopBtn: {
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  editShopBtnGrad: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  editShopBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0F172A",
   },
 });

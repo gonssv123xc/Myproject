@@ -239,7 +239,7 @@ export const ReportScreen = () => {
                 </View>
                 <View style={styles.bookingDetails}>
                   <Text style={styles.bookingCustomer}>ลูกค้า: {b.customerName}</Text>
-                  <Text style={styles.bookingBarber}>ช่าง: {b.barberName}</Text>
+                  <Text style={styles.bookingBarber}>{b.barberName}</Text>
                   <Text style={styles.bookingService}>บริการ: {b.serviceName}</Text>
                 </View>
                 <View style={styles.bookingFooter}>

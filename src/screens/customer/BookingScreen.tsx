@@ -15,6 +15,7 @@ import {
   Image,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   Check,
@@ -47,10 +48,16 @@ import {
   Service,
   Barber,
   getBarberSchedule,
+  subscribeToBookings,
 } from "../../services/bookingService";
-import { getCurrentProfile } from "../../services/authService";
+import { getCurrentProfile, UserProfile } from "../../services/authService";
 import { getMyCoupons, UserCoupon } from "../../services/rewardService";
 import { validatePromoCode } from "../../services/promoService";
+import { getShopInfo, ShopInfo } from "../../services/shopService";
+import {
+  notifyShopNewBooking,
+  notifyCustomerBookingSuccess,
+} from "../../services/telegramService";
 
 const PROMPTPAY_ID = process.env.EXPO_PUBLIC_PROMPTPAY_NUMBER || "0000000000";
 const DEPOSIT_AMOUNT = 50;
@@ -126,6 +133,10 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isValidatingCode, setIsValidatingCode] = useState(false);
 
+  // Duplicate Booking Alert Modal
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [duplicateModalMessage, setDuplicateModalMessage] = useState("");
+
   // Payment Modal State
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showCancelConfirmModal, setShowCancelConfirmModal] = useState(false);
@@ -143,6 +154,8 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
   const [barbers, setBarbers] = useState<Barber[]>([]);
   const [coupons, setCoupons] = useState<UserCoupon[]>([]);
   const [customerId, setCustomerId] = useState<string | null>(null);
+  const [customerProfile, setCustomerProfile] = useState<UserProfile | null>(null);
+  const [currentShop, setCurrentShop] = useState<ShopInfo | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
 
   const dates = generateDates();
@@ -151,14 +164,17 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
     useCallback(() => {
       const fetchData = async () => {
         setDataLoading(true);
-        const [svc, brb, profile] = await Promise.all([
+        const [svc, brb, profile, shop] = await Promise.all([
           getServices(),
           getBarbers(),
           getCurrentProfile(),
+          getShopInfo(),
         ]);
         setServices(svc);
         setBarbers(brb);
+        if (shop) setCurrentShop(shop);
         if (profile) {
+          setCustomerProfile(profile);
           setCustomerId(profile.id);
           const userCoupons = await getMyCoupons(profile.id);
           setCoupons(userCoupons);
@@ -229,6 +245,44 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
 
     if (result.success) {
       setPaymentSuccess(true);
+
+      // Trigger Telegram Notifications for Shop and Customer
+      try {
+        const barberObj = getBarberObj();
+        const serviceNames = getSelectedServiceObjs().map(s => s.name).join(", ");
+        const customerFullName = customerProfile ? `${customerProfile.firstName} ${customerProfile.lastName}`.trim() : "ลูกค้า";
+        
+        const notiData = {
+          bookingId: createdBookingId,
+          shopName: currentShop?.name || "ร้านตัดผม",
+          customerName: customerFullName,
+          customerPhone: customerProfile?.phone,
+          barberName: barberObj?.name || "ช่างประจำร้าน",
+          serviceName: serviceNames || "ตัดผม",
+          date: selectedDate.toISOString(),
+          startTime: selectedTime,
+          totalPrice: calculateFinalPrice(),
+          depositAmount: DEPOSIT_AMOUNT,
+          notes: note,
+        };
+
+        // 1. ส่งแจ้งเตือนเข้ากลุ่มร้านตัดผม (ใช้ Chat ID ของร้านนั้น หรือ Fallback ไป Default)
+        const targetShopChatId = currentShop?.telegramChatId;
+        notifyShopNewBooking(targetShopChatId, notiData);
+
+        // 2. ส่งใบยืนยันให้ Telegram ส่วนตัวของลูกค้า (ถ้าลูกค้าเคยเชื่อมต่อ Chat ID ไว้)
+        const activeCustomerTelegramId =
+          customerProfile?.telegramChatId ||
+          (customerProfile?.id ? await AsyncStorage.getItem(`@barber_user_telegram_chat_id_${customerProfile.id}`) : null) ||
+          (await AsyncStorage.getItem("@barber_user_telegram_chat_id"));
+
+        if (activeCustomerTelegramId) {
+          notifyCustomerBookingSuccess(activeCustomerTelegramId, notiData);
+        }
+      } catch (err) {
+        console.warn("Telegram notification error on booking:", err);
+      }
+
       setTimeout(() => {
         setShowPaymentModal(false);
         setPaymentSuccess(false);
@@ -286,10 +340,19 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
       }
       
       setBookedSlots(slots);
-      if (selectedTime && slots.includes(selectedTime)) setSelectedTime("");
       setLoadingSlots(false);
     };
+
     fetchSlots();
+
+    // Real-time synchronization when another user books or cancels
+    const unsubscribe = subscribeToBookings(() => {
+      fetchSlots();
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, [selectedBarber, selectedDate]);
 
 
@@ -336,7 +399,56 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
       setLoadingPreviewSlots(false);
     };
     fetchPreviewSlots();
+
+    const unsubscribe = subscribeToBookings(() => {
+      fetchPreviewSlots();
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, [previewBarber, modalDate]);
+
+  // Check if a time slot is blocked taking into account service duration
+  const isSlotBlocked = useCallback((slotTime: string) => {
+    if (bookedSlots.includes(slotTime)) return true;
+    const durationMins = getTotalDurationMinutes();
+    const [h, m] = slotTime.split(":").map(Number);
+    const slotsNeeded = Math.ceil(durationMins / 30);
+    for (let i = 1; i < slotsNeeded; i++) {
+      const totalMinutes = h * 60 + m + (i * 30);
+      const checkH = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+      const checkM = String(totalMinutes % 60).padStart(2, "0");
+      const checkSlot = `${checkH}:${checkM}`;
+      if (bookedSlots.includes(checkSlot) || !availableTimeSlots.includes(checkSlot)) {
+        return true;
+      }
+    }
+    return false;
+  }, [bookedSlots, availableTimeSlots, selectedServices]);
+
+  const isPreviewSlotBlocked = useCallback((slotTime: string) => {
+    if (previewSlots.includes(slotTime)) return true;
+    const durationMins = getTotalDurationMinutes();
+    const [h, m] = slotTime.split(":").map(Number);
+    const slotsNeeded = Math.ceil(durationMins / 30);
+    for (let i = 1; i < slotsNeeded; i++) {
+      const totalMinutes = h * 60 + m + (i * 30);
+      const checkH = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+      const checkM = String(totalMinutes % 60).padStart(2, "0");
+      const checkSlot = `${checkH}:${checkM}`;
+      if (previewSlots.includes(checkSlot) || !previewAvailableSlots.includes(checkSlot)) {
+        return true;
+      }
+    }
+    return false;
+  }, [previewSlots, previewAvailableSlots, selectedServices]);
+
+  React.useEffect(() => {
+    if (selectedTime && isSlotBlocked(selectedTime)) {
+      setSelectedTime("");
+    }
+  }, [bookedSlots, selectedServices, isSlotBlocked]);
 
   const getSelectedServiceObjs = useCallback(
     () => services.filter((s) => selectedServices.includes(s.id)),
@@ -354,8 +466,20 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
 
   const getTotalDurationMinutes = useCallback(() => {
     return getSelectedServiceObjs().reduce((sum, s) => {
-      const mins = parseInt(String(s.duration));
-      return sum + (isNaN(mins) ? 60 : mins);
+      let mins = s.durationMinutes;
+      if (mins === undefined || isNaN(mins)) {
+        const durStr = String(s.duration || "");
+        const hourMatch = durStr.match(/(\d+)\s*ชั่วโมง/);
+        const minMatch = durStr.match(/(\d+)\s*นาที/);
+        if (hourMatch || minMatch) {
+          const h = hourMatch ? parseInt(hourMatch[1], 10) : 0;
+          const m = minMatch ? parseInt(minMatch[1], 10) : 0;
+          mins = (h * 60) + m;
+        } else {
+          mins = parseInt(durStr.replace(/[^0-9]/g, ""), 10);
+        }
+      }
+      return sum + (isNaN(mins) || mins <= 0 ? 60 : mins);
     }, 0);
   }, [getSelectedServiceObjs]);
 
@@ -448,12 +572,62 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
 
     if (result.success) {
       setCreatedBookingId(result.bookingId || null);
+
+      // Trigger Telegram Notifications IMMEDIATELY
+      try {
+        const barberObj = getBarberObj();
+        const serviceNames = getSelectedServiceObjs().map(s => s.name).join(", ");
+        const customerFullName = customerProfile ? `${customerProfile.firstName} ${customerProfile.lastName}`.trim() : "ลูกค้า";
+        
+        const notiData = {
+          bookingId: result.bookingId,
+          shopName: currentShop?.name || "ร้านตัดผม",
+          customerName: customerFullName,
+          customerPhone: customerProfile?.phone,
+          barberName: barberObj?.name || "ช่างประจำร้าน",
+          serviceName: serviceNames || "ตัดผม",
+          date: selectedDate.toISOString(),
+          startTime: selectedTime,
+          endTime,
+          totalPrice: finalPrice,
+          depositAmount: DEPOSIT_AMOUNT,
+          notes: combinedNote,
+          status: "PENDING_PAYMENT",
+        };
+
+        // 1. ส่งแจ้งเตือนเข้ากลุ่มร้านทันที
+        const targetShopChatId = currentShop?.telegramChatId;
+        notifyShopNewBooking(targetShopChatId, notiData);
+
+        // 2. ส่งใบยืนยันให้ลูกค้าทันที (ถ้ามี Telegram ID)
+        const activeCustomerTelegramId =
+          customerProfile?.telegramChatId ||
+          (customerProfile?.id ? await AsyncStorage.getItem(`@barber_user_telegram_chat_id_${customerProfile.id}`) : null) ||
+          (await AsyncStorage.getItem("@barber_user_telegram_chat_id"));
+
+        if (activeCustomerTelegramId) {
+          notifyCustomerBookingSuccess(activeCustomerTelegramId, notiData);
+        }
+      } catch (err) {
+        console.warn("Telegram notification error on createBooking:", err);
+      }
+
       setShowPaymentModal(true);
       setTimeLeft(15 * 60);
     } else {
-      if (Platform.OS === "web")
-        window.alert(result.error || "โปรดลองอีกครั้ง");
-      else Alert.alert("จองคิวไม่สำเร็จ", result.error || "โปรดลองอีกครั้ง");
+      const errMsg = result.error || "โปรดลองอีกครั้ง";
+      const isDuplicate =
+        errMsg.includes("ถูกจองไปแล้ว") ||
+        errMsg.includes("จองซ้ำ") ||
+        errMsg.includes("มีรายการจองเวลา");
+      if (isDuplicate) {
+        setDuplicateModalMessage(errMsg);
+        setShowDuplicateModal(true);
+      } else if (Platform.OS === "web") {
+        window.alert(errMsg);
+      } else {
+        Alert.alert("จองคิวไม่สำเร็จ", errMsg);
+      }
     }
   };
 
@@ -704,7 +878,7 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
                     ) : (
                       <View style={styles.slotsGrid}>
                         {availableTimeSlots.map((time) => {
-                          const isBooked = bookedSlots.includes(time);
+                          const isBooked = isSlotBlocked(time);
                           const isSelected = selectedTime === time;
                           return (
                             <TouchableOpacity
@@ -879,6 +1053,59 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
           )}
         </View>
       )}
+
+      {/* ─── Duplicate Booking Alert Modal ─── */}
+      <Modal
+        visible={showDuplicateModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDuplicateModal(false)}
+      >
+        <View style={styles.dupModalBackdrop}>
+          <View style={styles.dupModalCard}>
+            {/* Icon */}
+            <View style={styles.dupIconCircle}>
+              <AlertTriangle size={36} color="#EF4444" />
+            </View>
+
+            {/* Title */}
+            <Text style={styles.dupTitle}>ไม่สามารถจองได้</Text>
+            <Text style={styles.dupSubtitle}>ช่วงเวลานี้ถูกจองไปแล้ว</Text>
+
+            {/* Divider */}
+            <View style={styles.dupDivider} />
+
+            {/* Message */}
+            <Text style={styles.dupMessage}>{duplicateModalMessage}</Text>
+
+            {/* Tip */}
+            <View style={styles.dupTipBox}>
+              <Text style={styles.dupTipText}>
+                💡 กรุณาเลือกเวลาอื่น หรือเลือกช่างท่านอื่นที่ว่างอยู่
+              </Text>
+            </View>
+
+            {/* Buttons */}
+            <View style={styles.dupBtnRow}>
+              <TouchableOpacity
+                style={styles.dupBtnSecondary}
+                onPress={() => setShowDuplicateModal(false)}
+              >
+                <Text style={styles.dupBtnSecondaryText}>ปิด</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.dupBtnPrimary}
+                onPress={() => {
+                  setShowDuplicateModal(false);
+                  setSelectedTime("");
+                }}
+              >
+                <Text style={styles.dupBtnPrimaryText}>เลือกเวลาใหม่</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={showPaymentModal}
@@ -1143,7 +1370,7 @@ export const BookingScreen: React.FC<Props> = ({ navigation }) => {
                   ) : (
                     <View style={styles.modalSlotsGrid}>
                       {previewAvailableSlots.map((time) => {
-                        const isBooked = previewSlots.includes(time);
+                        const isBooked = isPreviewSlotBlocked(time);
                         const isSelected = modalTime === time;
                         return (
                           <TouchableOpacity
@@ -2196,4 +2423,116 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   nextBtnText: { fontSize: 16, fontWeight: "bold", color: "#0F172A" },
+
+  // ── Duplicate Booking Modal Styles ──
+  dupModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(5, 10, 25, 0.85)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  dupModalCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: "#1E293B",
+    borderRadius: 28,
+    padding: 28,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.35)",
+    shadowColor: "#EF4444",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    elevation: 20,
+  },
+  dupIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+    borderWidth: 1.5,
+    borderColor: "rgba(239, 68, 68, 0.4)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  dupTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#F8FAFC",
+    textAlign: "center",
+    letterSpacing: 0.3,
+  },
+  dupSubtitle: {
+    fontSize: 14,
+    color: "#EF4444",
+    fontWeight: "600",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  dupDivider: {
+    width: "100%",
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    marginVertical: 20,
+  },
+  dupMessage: {
+    fontSize: 14,
+    color: "#94A3B8",
+    textAlign: "center",
+    lineHeight: 22,
+    paddingHorizontal: 8,
+  },
+  dupTipBox: {
+    marginTop: 16,
+    backgroundColor: "rgba(212, 175, 55, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(212, 175, 55, 0.25)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    width: "100%",
+  },
+  dupTipText: {
+    fontSize: 13,
+    color: "#D4AF37",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  dupBtnRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 24,
+    width: "100%",
+  },
+  dupBtnSecondary: {
+    flex: 1,
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  dupBtnSecondaryText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#94A3B8",
+  },
+  dupBtnPrimary: {
+    flex: 2,
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+  },
+  dupBtnPrimaryText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
 });

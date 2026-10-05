@@ -19,6 +19,8 @@ import { CustomButton } from "../../components/CustomButton";
 import { confirmLogout } from "../../utils/logout";
 import { getBookingHistory, cancelBooking, submitReview, Booking } from "../../services/bookingService";
 import { getCurrentProfile } from "../../services/authService";
+import { getShopInfo } from "../../services/shopService";
+import { notifyBookingCancelled, DEFAULT_SHOP_CHAT_ID } from "../../services/telegramService";
 import { useFocusEffect } from "@react-navigation/native";
 
 export const HistoryScreen: React.FC = () => {
@@ -46,6 +48,7 @@ export const HistoryScreen: React.FC = () => {
   );
 
   const handleCancel = (id: string) => {
+    const bookingToCancel = history.find((b) => b.id === id);
     Alert.alert("ยืนยันการยกเลิก", "คุณต้องการยกเลิกการจองนี้ใช่หรือไม่?", [
       { text: "ยกเลิก", style: "cancel" },
       {
@@ -58,6 +61,23 @@ export const HistoryScreen: React.FC = () => {
           } else {
             Alert.alert("ยกเลิกการจองเรียบร้อย");
             loadHistory();
+
+            // Notify Telegram
+            if (bookingToCancel) {
+              const profile = await getCurrentProfile();
+              const shop = await getShopInfo();
+              const notiData = {
+                shopName: shop?.name || "ร้านตัดผม",
+                customerName: profile ? `${profile.firstName} ${profile.lastName}`.trim() : "ลูกค้า",
+                date: bookingToCancel.date ? bookingToCancel.date.split("T")[0] : "",
+                startTime: bookingToCancel.startTime,
+                cancelledBy: "customer" as const,
+              };
+              notifyBookingCancelled(shop?.telegramChatId || DEFAULT_SHOP_CHAT_ID, notiData);
+              if (profile?.telegramChatId) {
+                notifyBookingCancelled(profile.telegramChatId, notiData);
+              }
+            }
           }
         },
       },
@@ -119,7 +139,7 @@ export const HistoryScreen: React.FC = () => {
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.serviceTitle}>{item.serviceName}</Text>
-                  <Text style={styles.barberName}>ช่าง: {item.barberName}</Text>
+                  <Text style={styles.barberName}>{item.barberName}</Text>
                 </View>
                 <View style={[styles.badge, { backgroundColor: badge.bg }]}>
                   <Text style={[styles.badgeText, { color: badge.color }]}>{badge.label}</Text>

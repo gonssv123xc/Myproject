@@ -2,6 +2,8 @@ export type RootStackParamList = {
   Login: undefined;
   Register: undefined;
   StaffLogin: undefined;
+  OwnerRegister: undefined;
+  SelectShop: undefined;
   CustomerMain: undefined;
   BarberMain: undefined;
   OwnerMain: undefined;

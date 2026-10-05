@@ -88,12 +88,12 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
           <View style={styles.brandSection}>
             <View style={styles.logoBadge}>
               <Image 
-                source={require("../../../assets/sawasdee_logo.jpg")} 
+                source={require("../../../assets/app_logo.jpg")} 
                 style={{ width: 96, height: 96, borderRadius: 24 }} 
                 resizeMode="cover"
               />
             </View>
-            <Text style={styles.title}>Sawasdee club</Text>
+            <Text style={styles.title}>Barbershop Booking System</Text>
             <Text style={styles.subtitle}>สร้างบัญชีเพื่อจองคิวตัดผม</Text>
           </View>
 
@@ -177,6 +177,15 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
                 <Text style={styles.primaryLink}>เข้าสู่ระบบ</Text>
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity
+              style={{ marginTop: 16, alignItems: "center" }}
+              onPress={() => navigation.navigate("OwnerRegister")}
+            >
+              <Text style={{ fontSize: 12, color: colors.primary, textDecorationLine: "underline" }}>
+                ต้องการเปิดร้านตัดผมของคุณ? ลงทะเบียนเจ้าของร้าน
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -220,11 +229,13 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: colors.primary,
     letterSpacing: 0.5,
+    textAlign: "center",
   },
   subtitle: {
     fontSize: 15,
     color: colors.textMuted,
     marginTop: 2,
+    textAlign: "center",
   },
   card: {
     backgroundColor: colors.card,

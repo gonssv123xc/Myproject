@@ -2,6 +2,8 @@ import { supabase } from "./supabase";
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createShop, setSelectedShopId } from "./shopService";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -15,6 +17,7 @@ export interface UserProfile {
   role: "CUSTOMER" | "BARBER" | "OWNER";
   avatar?: string;
   points?: number;
+  telegramChatId?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -99,6 +102,118 @@ export const registerCustomer = async (data: {
   }
 };
 
+export interface OwnerRegistrationData {
+  // ข้อมูลเจ้าของร้าน
+  name: string;
+  phone: string;
+  email: string;
+  password: string;
+
+  // ข้อมูลร้านตัดผม
+  shopName: string;
+  shopSubtitle?: string;
+  shopAddress: string;
+  shopOpenHours?: string;
+  shopPhone?: string;
+  shopPromptPay?: string;
+  shopFacebook?: string;
+  shopInstagram?: string;
+  shopLine?: string;
+  shopTiktok?: string;
+  logoUrl?: string | null;
+  coverUrl?: string | null;
+}
+
+/**
+ * Register a new owner account and create their barbershop record
+ */
+export const registerOwnerWithShop = async (
+  data: OwnerRegistrationData
+): Promise<{ success: boolean; error?: string; shopId?: string }> => {
+  try {
+    const emailClean = data.email.trim().toLowerCase();
+
+    // 1. Sign up user with Supabase Auth as OWNER
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: emailClean,
+      password: data.password,
+      options: {
+        data: {
+          firstName: data.name.trim().split(" ")[0],
+          lastName: data.name.trim().split(" ").slice(1).join(" ") || " ",
+          phone: data.phone.trim(),
+          role: "OWNER",
+        },
+      },
+    });
+
+    if (authError) {
+      return { success: false, error: formatAuthError(authError.message) };
+    }
+
+    if (!authData.user) {
+      return { success: false, error: "ไม่สามารถสร้างบัญชีเจ้าของร้านได้" };
+    }
+
+    // 2. Save user profile to User table
+    const firstName = data.name.trim().split(" ")[0];
+    const lastName = data.name.trim().split(" ").slice(1).join(" ") || " ";
+
+    const profile = {
+      id: authData.user.id,
+      firstName: firstName,
+      lastName: lastName,
+      phone: data.phone.trim(),
+      email: emailClean,
+      password: data.password,
+      role: "OWNER",
+      updatedAt: new Date().toISOString(),
+    };
+
+    const { error: profileError } = await supabase
+      .from("User")
+      .upsert(profile, { onConflict: "id" });
+
+    if (profileError) {
+      console.warn("Owner profile table insert warning:", profileError.message);
+    }
+
+    // 3. Create shop record in Shop table
+    const shopResult = await createShop({
+      name: data.shopName,
+      subtitle: data.shopSubtitle || "ระบบจองคิวออนไลน์",
+      address: data.shopAddress,
+      openHours: data.shopOpenHours || "09:00 – 19:00",
+      phone: data.shopPhone || data.phone,
+      promptpayNumber: data.shopPromptPay || "",
+      facebookUrl: data.shopFacebook || "",
+      instagramUrl: data.shopInstagram || "",
+      lineUrl: data.shopLine || "",
+      tiktokUrl: data.shopTiktok || "",
+      logoUrl: data.logoUrl || null,
+      coverUrl: data.coverUrl || null,
+    });
+
+    if (!shopResult.success || !shopResult.shop) {
+      return {
+        success: false,
+        error: shopResult.error || "สร้างบัญชีสำเร็จ แต่ไม่สามารถบันทึกข้อมูลร้านได้",
+      };
+    }
+
+    // 4. Set current selected shop
+    await setSelectedShopId(shopResult.shop.id);
+
+    return { success: true, shopId: shopResult.shop.id };
+  } catch (err: any) {
+    console.error("registerOwnerWithShop error:", err);
+    return {
+      success: false,
+      error: formatAuthError(err.message || "เกิดข้อผิดพลาดในการลงทะเบียนร้าน"),
+    };
+  }
+};
+
 /**
  * Login user with email & password and retrieve profile
  */
@@ -130,6 +245,8 @@ export const loginUser = async (
       .eq("id", authData.user.id)
       .single();
 
+    const localTelegramId = await AsyncStorage.getItem(`@barber_user_telegram_chat_id_${authData.user.id}`).catch(() => null);
+
     if (profileError || !profileData) {
       // Fallback to metadata if profile record doesn't exist in table yet
       const metadata = authData.user.user_metadata || {};
@@ -140,11 +257,18 @@ export const loginUser = async (
         phone: metadata.phone || "",
         email: authData.user.email || emailClean,
         role: metadata.role || "CUSTOMER",
+        telegramChatId: metadata.telegramChatId || localTelegramId || undefined,
       };
       return { success: true, profile: fallbackProfile };
     }
 
-    return { success: true, profile: profileData as UserProfile };
+    return {
+      success: true,
+      profile: {
+        ...profileData,
+        telegramChatId: profileData.telegramChatId || authData.user.user_metadata?.telegramChatId || localTelegramId || undefined,
+      } as UserProfile
+    };
   } catch (err: any) {
     return { success: false, error: formatAuthError(err.message || "เกิดข้อผิดพลาดในการเข้าสู่ระบบ") };
   }
@@ -196,7 +320,7 @@ export const signInWithOAuth = async (
             return { success: false, error: "เข้าสู่ระบบด้วย Social ไม่สำเร็จ: " + sessionError.message };
           }
         }
-        
+
         return { success: true };
       } else if (res.type === 'cancel' || res.type === 'dismiss') {
         return { success: false, error: "ยกเลิกการเข้าสู่ระบบ" };
@@ -223,7 +347,16 @@ export const getCurrentProfile = async (): Promise<UserProfile | null> => {
       .eq("id", user.id)
       .single();
 
-    if (profile) return profile as UserProfile;
+    // Local cached telegram ID fallback
+    const localTelegramId = await AsyncStorage.getItem(`@barber_user_telegram_chat_id_${user.id}`).catch(() => null)
+      || await AsyncStorage.getItem("@barber_user_telegram_chat_id").catch(() => null);
+
+    if (profile) {
+      return {
+        ...profile,
+        telegramChatId: profile.telegramChatId || user.user_metadata?.telegramChatId || localTelegramId || undefined,
+      } as UserProfile;
+    }
 
     const metadata = user.user_metadata || {};
     return {
@@ -233,6 +366,7 @@ export const getCurrentProfile = async (): Promise<UserProfile | null> => {
       phone: metadata.phone || "",
       email: user.email || "",
       role: metadata.role || "CUSTOMER",
+      telegramChatId: metadata.telegramChatId || localTelegramId || undefined,
     };
   } catch {
     return null;
@@ -258,7 +392,7 @@ export const updateUserProfile = async (
       .eq("id", userId);
 
     if (error) throw error;
-    
+
     // Also update Auth metadata for fallback
     await supabase.auth.updateUser({
       data: {
@@ -324,3 +458,37 @@ export const uploadAvatar = async (
     return { success: false, error: err.message || "Failed to upload avatar" };
   }
 };
+
+/**
+ * Update user's Telegram Chat ID
+ */
+export const updateTelegramChatId = async (
+  userId: string,
+  chatId: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    // 1. Save locally for instant availability
+    await AsyncStorage.setItem(`@barber_user_telegram_chat_id_${userId}`, chatId);
+    await AsyncStorage.setItem("@barber_user_telegram_chat_id", chatId);
+
+    // 2. Save to User database table
+    const { error } = await supabase
+      .from("User")
+      .update({ telegramChatId: chatId, updatedAt: new Date().toISOString() })
+      .eq("id", userId);
+
+    if (error) {
+      console.warn("DB update error:", error.message);
+    }
+
+    // 3. Save to Supabase auth metadata
+    await supabase.auth.updateUser({
+      data: { telegramChatId: chatId },
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+};
+

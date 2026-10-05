@@ -69,7 +69,7 @@ export const ReviewsScreen: React.FC = () => {
                   <View>
                     <Text style={styles.customerName}>{r.customer}</Text>
                     <Text style={styles.barberInfo}>
-                      ช่าง: {r.barber} • {r.date}
+                      {r.barber} • {r.date}
                     </Text>
                   </View>
                   <View style={styles.starsRow}>

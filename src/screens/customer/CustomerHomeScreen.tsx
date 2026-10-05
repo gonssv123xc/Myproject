@@ -12,10 +12,12 @@ import {
   Animated,
   Linking,
   Platform,
+  Alert,
+  TextInput,
 } from "react-native";
 import {
   Scissors, Calendar, Clock, ChevronRight, Tag, Zap, Gift,
-  Star, MapPin, Phone, Clock3, ExternalLink, X, Sparkles, Info,
+  Star, MapPin, Phone, Clock3, ExternalLink, X, Sparkles, Info, Store, Send, CheckCircle2,
 } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Path } from "react-native-svg";
@@ -26,7 +28,9 @@ import { CustomHeader } from "../../components/CustomHeader";
 import { CustomCard } from "../../components/CustomCard";
 import { confirmLogout } from "../../utils/logout";
 import { getUpcomingBookings, Booking } from "../../services/bookingService";
-import { getCurrentProfile } from "../../services/authService";
+import { getCurrentProfile, UserProfile, updateTelegramChatId } from "../../services/authService";
+import { getShopInfo, ShopInfo, subscribeToShopUpdates, getShopLogoSource } from "../../services/shopService";
+import { getTelegramConnectLink } from "../../services/telegramService";
 import { useFocusEffect } from "@react-navigation/native";
 
 // ─── Types ─────────────────────────────────────────────
@@ -318,7 +322,7 @@ const computeShopStatus = () => {
 };
 
 // ─── Shop Info Footer ────────────────────────────────────
-const ShopInfoFooter: React.FC = () => {
+const ShopInfoFooter: React.FC<{ shopInfo?: ShopInfo | null }> = ({ shopInfo }) => {
   const [shopStatus, setShopStatus] = useState(computeShopStatus);
 
   useEffect(() => {
@@ -329,7 +333,9 @@ const ShopInfoFooter: React.FC = () => {
   const { isOpen, todayHours } = shopStatus;
 
   const openMaps = () => {
-    const query = encodeURIComponent("ร้านตัดผมบ้านจาร ถนนจิระ บุรีรัมย์");
+    const sName = shopInfo?.name || "ร้านตัดผม";
+    const sAddr = shopInfo?.address || "ถนนจิระ บุรีรัมย์";
+    const query = encodeURIComponent(`${sName} ${sAddr}`);
     const lat = 15.0;
     const lng = 102.9167;
     const url = Platform.OS === "ios"
@@ -341,10 +347,10 @@ const ShopInfoFooter: React.FC = () => {
   };
 
   const socialLinks = [
-    { label: "Facebook",  Icon: FacebookIcon,  color: "#60A5FA", bg: "rgba(24,119,242,0.22)", border: "rgba(96,165,250,0.5)",   url: "https://www.facebook.com/profile.php?id=100063824452415" },
-    { label: "Instagram", Icon: InstagramIcon, color: "#F472B6", bg: "rgba(225,48,108,0.22)", border: "rgba(244,114,182,0.5)", url: "https://instagram.com" },
-    { label: "LINE",      Icon: LINEIcon,      color: "#4ADE80", bg: "rgba(6,199,85,0.22)",   border: "rgba(74,222,128,0.5)",  url: "https://line.me" },
-    { label: "TikTok",   Icon: TikTokIcon,    color: "#E2E8F0", bg: "rgba(255,255,255,0.12)",border: "rgba(255,255,255,0.28)", url: "https://tiktok.com" },
+    { label: "Facebook",  Icon: FacebookIcon,  color: "#60A5FA", bg: "rgba(24,119,242,0.22)", border: "rgba(96,165,250,0.5)",   url: shopInfo?.facebookUrl || "https://www.facebook.com/profile.php?id=100063824452415" },
+    { label: "Instagram", Icon: InstagramIcon, color: "#F472B6", bg: "rgba(225,48,108,0.22)", border: "rgba(244,114,182,0.5)", url: shopInfo?.instagramUrl || "https://instagram.com" },
+    { label: "LINE",      Icon: LINEIcon,      color: "#4ADE80", bg: "rgba(6,199,85,0.22)",   border: "rgba(74,222,128,0.5)",  url: shopInfo?.lineUrl || "https://line.me" },
+    { label: "TikTok",   Icon: TikTokIcon,    color: "#E2E8F0", bg: "rgba(255,255,255,0.12)",border: "rgba(255,255,255,0.28)", url: shopInfo?.tiktokUrl || "https://tiktok.com" },
   ];
 
   return (
@@ -352,12 +358,12 @@ const ShopInfoFooter: React.FC = () => {
       {/* Header */}
       <View style={fs.headerRow}>
         <Image
-          source={require("../../../assets/sawasdee_logo.jpg")}
+          source={getShopLogoSource(shopInfo)}
           style={fs.logo}
           resizeMode="cover"
         />
         <View style={{ flex: 1 }}>
-          <Text style={fs.shopName}>ร้านตัดผมบ้านจาร</Text>
+          <Text style={fs.shopName}>{shopInfo?.name || "ร้านตัดผม"}</Text>
           <View style={fs.statusPill}>
             <View style={[fs.statusDot, { backgroundColor: isOpen ? "#4ADE80" : "#F87171" }]} />
             <Text style={[fs.statusText, { color: isOpen ? "#4ADE80" : "#F87171" }]}>
@@ -413,8 +419,7 @@ const ShopInfoFooter: React.FC = () => {
             <MapPin size={16} color={colors.primary} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={fs.infoMain}>ถนน จิระ ตำบล ในเมือง</Text>
-            <Text style={fs.infoSub}>อ.เมืองบุรีรัมย์ บุรีรัมย์ 31000</Text>
+            <Text style={fs.infoMain}>{shopInfo?.address || "ถนน จิระ ตำบล ในเมือง อ.เมืองบุรีรัมย์ บุรีรัมย์ 31000"}</Text>
           </View>
           <View style={fs.extBadge}>
             <ExternalLink size={12} color={colors.primary} />
@@ -423,14 +428,14 @@ const ShopInfoFooter: React.FC = () => {
         </TouchableOpacity>
         <TouchableOpacity
           style={fs.infoCard}
-          onPress={() => Linking.openURL("tel:0903603093")}
+          onPress={() => Linking.openURL(`tel:${(shopInfo?.phone || "090-360-3093").replace(/[^0-9]/g, "")}`)}
           activeOpacity={0.75}
         >
           <View style={fs.infoIconBox}>
             <Phone size={16} color={colors.primary} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={fs.infoMain}>090-360-3093</Text>
+            <Text style={fs.infoMain}>{shopInfo?.phone || "090-360-3093"}</Text>
             <Text style={fs.infoSub}>โทรจองคิวหรือสอบถาม</Text>
           </View>
           <View style={fs.extBadge}>
@@ -466,7 +471,7 @@ const ShopInfoFooter: React.FC = () => {
         </View>
       </View>
 
-      <Text style={fs.footNote}>© 2025 บ้านจาร Barbershop · All rights reserved</Text>
+      <Text style={fs.footNote}>© 2025 {shopInfo?.name || "ร้านตัดผม"} · All rights reserved</Text>
     </View>
   );
 };
@@ -484,30 +489,58 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
 
   const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
   const [customerName, setCustomerName] = useState<string>("ลูกค้า");
+  const [customerProfile, setCustomerProfile] = useState<UserProfile | null>(null);
+  const [shopInfo, setShopInfo] = useState<ShopInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPromo, setSelectedPromo] = useState<Promotion | null>(null);
+  const [showTelegramModal, setShowTelegramModal] = useState(false);
+  const [inputTelegramId, setInputTelegramId] = useState("");
+  const [savingTelegram, setSavingTelegram] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
       const fetchData = async () => {
         setLoading(true);
-        const profile = await getCurrentProfile();
-        if (profile && isActive) {
-          setCustomerName(profile.firstName || "ลูกค้า");
-          const data = await getUpcomingBookings(profile.id);
-          if (isActive) setUpcomingBookings(data);
+        const [profile, shop] = await Promise.all([
+          getCurrentProfile(),
+          getShopInfo()
+        ]);
+        if (isActive) {
+          if (profile) {
+            setCustomerProfile(profile);
+            setCustomerName(profile.firstName || "ลูกค้า");
+            if (profile.telegramChatId) {
+              setInputTelegramId(profile.telegramChatId);
+            }
+            const data = await getUpcomingBookings(profile.id);
+            if (isActive) setUpcomingBookings(data);
+          }
+          if (shop) setShopInfo(shop);
+          setLoading(false);
         }
-        if (isActive) setLoading(false);
       };
       fetchData();
-      return () => { isActive = false; };
+
+      // Subscribe to real-time shop updates
+      const unsubscribe = subscribeToShopUpdates((updated) => {
+        if (isActive) setShopInfo(updated);
+      });
+
+      return () => { 
+        isActive = false; 
+        unsubscribe();
+      };
     }, [])
   );
 
   return (
     <ImageBackground
-      source={require("../../../assets/13.jpg")}
+      source={
+        shopInfo?.coverUrl
+          ? { uri: shopInfo.coverUrl }
+          : require("../../../assets/13.jpg")
+      }
       style={sc.container}
       resizeMode="cover"
     >
@@ -523,6 +556,29 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
         <View style={[sc.contentWrap, isDesktop && sc.contentDesktop]}>
           {/* Left / Top */}
           <View style={isDesktop ? sc.leftCol : sc.fullCol}>
+            {/* Current Selected Shop Badge & Switcher */}
+            <View style={sc.currentShopBar}>
+              <View style={sc.currentShopLeft}>
+                <View style={sc.currentShopIconBox}>
+                  <Store size={15} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={sc.currentShopLabel}>ร้านที่เลือกอยู่</Text>
+                  <Text style={sc.currentShopName} numberOfLines={1}>
+                    {shopInfo?.name || "ร้านตัดผม"}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={sc.switchShopBtn}
+                onPress={() => (navigation as any).navigate("SelectShop")}
+                activeOpacity={0.75}
+              >
+                <Text style={sc.switchShopBtnText}>เปลี่ยนร้าน</Text>
+                <ChevronRight size={14} color="#FBBF24" />
+              </TouchableOpacity>
+            </View>
+
             <View style={sc.welcomeBox}>
               <Text style={sc.welcomeTitle}>
                 สวัสดีครับ{" "}
@@ -554,6 +610,69 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
                 </View>
               </LinearGradient>
             </TouchableOpacity>
+
+            {/* Telegram Notification Connect Card */}
+            <TouchableOpacity
+              onPress={() => {
+                if (customerProfile?.telegramChatId) {
+                  setInputTelegramId(customerProfile.telegramChatId);
+                }
+                setShowTelegramModal(true);
+              }}
+              activeOpacity={0.85}
+              style={{ marginTop: 12 }}
+            >
+              <LinearGradient
+                colors={["#0088CC25", "#0088CC08"]}
+                style={{
+                  borderRadius: 16,
+                  padding: 14,
+                  borderWidth: 1,
+                  borderColor: "rgba(0, 136, 204, 0.4)",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginRight: 10 }}>
+                  <View
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      backgroundColor: "#0088CC",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 12,
+                    }}
+                  >
+                    <Send size={18} color="#FFF" style={{ marginLeft: -2, marginTop: 1 }} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <Text style={{ fontSize: 14, fontWeight: "700", color: "#38BDF8" }}>
+                        รับแจ้งเตือนคิวผ่าน Telegram
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>
+                      กดเพื่อเปิด Telegram บอตและรับใบเสร็จยืนยันคิวทันที
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  style={{
+                    backgroundColor: customerProfile?.telegramChatId ? "#10B981" : "#0088CC",
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 20,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: "600", color: "#FFF" }}>
+                    {customerProfile?.telegramChatId ? "เชื่อมต่อแล้ว ✓" : "เชื่อมต่อ"}
+                  </Text>
+                </View>
+              </LinearGradient>
+            </TouchableOpacity>
           </View>
 
           {/* Right / Bottom */}
@@ -582,7 +701,7 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
                   <View style={sc.cardRow}>
                     <View style={{ flex: 1 }}>
                       <Text style={sc.svcName}>{item.serviceName}</Text>
-                      <Text style={sc.barberName}>ช่าง: {item.barberName}</Text>
+                      <Text style={sc.barberName}>{item.barberName}</Text>
                       <View style={sc.metaRow}>
                         <View style={sc.metaChip}>
                           <Calendar size={12} color={colors.textMuted} />
@@ -627,7 +746,7 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
 
         {/* Footer */}
         <View style={sc.footerWrap}>
-          <ShopInfoFooter />
+          <ShopInfoFooter shopInfo={shopInfo} />
         </View>
       </ScrollView>
 
@@ -639,6 +758,139 @@ export const CustomerHomeScreen: React.FC<Props> = ({ navigation }) => {
           navigation.navigate("Booking");
         }}
       />
+
+      {/* Telegram Setup Modal */}
+      <Modal
+        visible={showTelegramModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTelegramModal(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.75)",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: 20,
+          }}
+        >
+          <View
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              backgroundColor: "#0F172A",
+              borderRadius: 24,
+              borderWidth: 1,
+              borderColor: "rgba(0,136,204,0.4)",
+              padding: 24,
+            }}
+          >
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: "#0088CC",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginRight: 10,
+                  }}
+                >
+                  <Send size={18} color="#FFF" />
+                </View>
+                <Text style={{ fontSize: 18, fontWeight: "700", color: "#FFF" }}>
+                  เชื่อมต่อ Telegram
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowTelegramModal(false)}>
+                <X size={20} color="#94A3B8" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 13, color: "#94A3B8", lineHeight: 20, marginBottom: 16 }}>
+              เพื่อรับใบเสร็จยืนยันคิวและแจ้งเตือนก่อนถึงเวลานัดหมายผ่าน Telegram ส่วนตัว:
+            </Text>
+
+            <TouchableOpacity
+              onPress={() => {
+                Linking.openURL("https://t.me/barber_booking_alert_bot");
+              }}
+              style={{
+                backgroundColor: "#0088CC",
+                paddingVertical: 12,
+                borderRadius: 12,
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
+                marginBottom: 16,
+              }}
+            >
+              <Send size={16} color="#FFF" style={{ marginRight: 8 }} />
+              <Text style={{ color: "#FFF", fontWeight: "700", fontSize: 14 }}>
+                1. กดเพื่อเปิด Telegram Bot (@barber_booking_alert_bot)
+              </Text>
+            </TouchableOpacity>
+
+            <Text style={{ fontSize: 12, color: "#CBD5E1", marginBottom: 8, lineHeight: 18 }}>
+              2. กดปุ่ม <Text style={{ fontWeight: "700", color: "#FBBF24" }}>Start</Text> ในแชทของบอต{"\n"}
+              3. นำ <Text style={{ fontWeight: "700", color: "#38BDF8" }}>Telegram Chat ID</Text> หรือพิมพ์แชทหาบอต แล้วกรอกที่นี่:
+            </Text>
+
+            <TextInput
+              style={{
+                backgroundColor: "#1E293B",
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.1)",
+                color: "#FFF",
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+              placeholder="กรอก Telegram ID เช่น 8753992854"
+              placeholderTextColor="#64748B"
+              value={inputTelegramId}
+              onChangeText={setInputTelegramId}
+              keyboardType="number-pad"
+            />
+
+            <TouchableOpacity
+              onPress={async () => {
+                if (!inputTelegramId.trim()) {
+                  Alert.alert("กรุณากรอกข้อมูล", "กรุณากรอก Chat ID หรือตัวเลข Telegram");
+                  return;
+                }
+                if (!customerProfile?.id) return;
+                setSavingTelegram(true);
+                const res = await updateTelegramChatId(customerProfile.id, inputTelegramId.trim());
+                setSavingTelegram(false);
+                if (res.success) {
+                  Alert.alert("สำเร็จ", "เชื่อมต่อ Telegram เรียบร้อยแล้ว!");
+                  setCustomerProfile((prev: any) => ({ ...prev, telegramChatId: inputTelegramId.trim() }));
+                  setShowTelegramModal(false);
+                } else {
+                  Alert.alert("ข้อผิดพลาด", res.error || "ไม่สามารถบันทึกได้");
+                }
+              }}
+              disabled={savingTelegram}
+              style={{
+                backgroundColor: colors.primary,
+                paddingVertical: 12,
+                borderRadius: 12,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#0F172A", fontWeight: "700", fontSize: 14 }}>
+                {savingTelegram ? "กำลังบันทึก..." : "บันทึกการเชื่อมต่อ"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ImageBackground>
   );
 };
@@ -661,6 +913,59 @@ const sc = StyleSheet.create({
   welcomeTitle: { fontSize: 26, fontWeight: "700", color: "#CBD5E1" },
   welcomeName: { fontWeight: "900", color: colors.primary },
   welcomeSub: { fontSize: 15, color: "#64748B", marginTop: 6 },
+  currentShopBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(30, 41, 59, 0.75)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.3)",
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+  },
+  currentShopLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  currentShopIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  currentShopLabel: {
+    fontSize: 10,
+    color: colors.primary,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  currentShopName: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  switchShopBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.25)",
+  },
+  switchShopBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FBBF24",
+  },
   bookBanner: {
     borderRadius: 22, padding: 22,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
